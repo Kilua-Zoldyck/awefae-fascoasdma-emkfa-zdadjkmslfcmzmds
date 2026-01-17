@@ -192,6 +192,16 @@ class Monitor:
             
             if 'error' in result:
                 logger.error(f"❌ API: {result['error']}")
+                if result['error'] in ['no_token', 401]:
+                    await self.telegram.send("""⚠️ <b>تنبيه: الجلسة انتهت!</b>
+━━━━━━━━━━━━━━━━━
+❌ النظام لم يستطع الدخول.
+ربما تم تغيير كلمة المرور أو تسجيل الخروج.
+
+🛠️ <b>الحل المطلوب:</b>
+1. استخرج Session جديد باستخدام <code>extract_session.py</code>
+2. ارفع الملف <code>browser_state.json</code> إلى GitHub يدويًا.
+━━━━━━━━━━━━━━━━━""")
                 return None
             
             # Save updated session (tokens may have refreshed)
