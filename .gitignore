@@ -1,0 +1,16 @@
+# Environment
+.env
+venv/
+__pycache__/
+
+# State files (kept as artifacts)
+known_tickets.json
+browser_state.json
+session.json
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
