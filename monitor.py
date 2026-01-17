@@ -40,10 +40,10 @@ def random_delay(min_s: float, max_s: float):
 
 
 def startup_delay():
-    """تأخير عشوائي 10-30 دقيقة (GitHub Actions فقط)"""
+    """تأخير عشوائي 30 ثانية - 6 دقائق (GitHub Actions فقط)"""
     if os.getenv('GITHUB_ACTIONS'):
-        d = random.uniform(600, 1800)  # 10-30 دقيقة
-        logger.info(f"⏳ Startup delay: {d/60:.0f} min")
+        d = random.uniform(30, 360)  # 30 ثانية - 6 دقائق
+        logger.info(f"⏳ Startup delay: {d:.0f}s")
         time.sleep(d)
 
 
