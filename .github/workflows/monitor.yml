@@ -32,11 +32,13 @@ jobs:
           playwright install-deps chromium
 
       - name: 📂 Download state
-        uses: actions/download-artifact@v4
-        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v6
         with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: monitor.yml
           name: ftth-state
           path: .
+          if_no_artifact_found: warn
 
       - name: 🔍 Run monitor
         env:
