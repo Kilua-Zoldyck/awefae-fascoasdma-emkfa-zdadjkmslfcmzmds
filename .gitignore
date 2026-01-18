@@ -14,3 +14,9 @@ session.json
 # IDE
 .vscode/
 .idea/
+
+# Dev files
+json
+login_failed.png
+simulate_new_ticket.py
+test_local.fish
