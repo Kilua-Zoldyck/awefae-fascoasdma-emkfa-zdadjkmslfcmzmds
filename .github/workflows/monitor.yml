@@ -31,7 +31,19 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
+      - name: 🔍 Check for fresh state
+        id: check_state
+        run: |
+          if [ -f browser_state.json ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "✅ Using fresh state from repository"
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No repo state, will use artifact"
+          fi
+
       - name: 📂 Download state
+        if: steps.check_state.outputs.found != 'true'
         uses: dawidd6/action-download-artifact@v6
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
