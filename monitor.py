@@ -45,9 +45,15 @@ async def browser_refresh_token(page) -> bool:
     try:
         logger.info("🔄 Attempting browser-based token refresh...")
         
-        # Navigate to auth/refresh endpoint or just reload dashboard
-        # This triggers the site's built-in token refresh
+        # Navigate to dashboard - this triggers the site's built-in token refresh
         await page.goto('https://admin.ftth.iq/dashboard', wait_until='networkidle', timeout=60000)
+        
+        # ⚠️ Check if redirected to SSO login (means refresh token expired)
+        current_url = page.url
+        if 'sso.ftth.iq' in current_url or 'auth/login' in current_url:
+            logger.error("❌ Redirected to login - Refresh Token expired!")
+            logger.error("   💡 You need to run extract_session.py locally")
+            return False
         
         # Wait for the site's JavaScript to potentially refresh the token
         await asyncio.sleep(5)
