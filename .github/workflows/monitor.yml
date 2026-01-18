@@ -56,6 +56,8 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+          FTTH_USERNAME: ${{ secrets.FTTH_USERNAME }}
+          FTTH_PASSWORD: ${{ secrets.FTTH_PASSWORD }}
         run: python monitor.py
 
       - name: 💾 Save state

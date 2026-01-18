@@ -29,18 +29,110 @@ KNOWN_TICKETS_FILE = Path('known_tickets.json')
 DASHBOARD_URL = 'https://admin.ftth.iq/dashboard'
 API_URL = 'https://admin.ftth.iq/api/support/tickets'
 
-# OAuth2 Token Refresh (Keycloak)
-KEYCLOAK_TOKEN_URL = 'https://sso.ftth.iq/auth/realms/Partners/protocol/openid-connect/token'
-KEYCLOAK_CLIENT_ID = 'earthlink-portals'
+# 🔐 Auto-Login Credentials (from GitHub Secrets)
+FTTH_USERNAME = os.getenv('FTTH_USERNAME', '')
+FTTH_PASSWORD = os.getenv('FTTH_PASSWORD', '')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
+async def auto_login(page) -> bool:
+    """
+    تسجيل دخول تلقائي بالـ Username/Password
+    يُستخدم عندما تنتهي الـ session
+    """
+    if not FTTH_USERNAME or not FTTH_PASSWORD:
+        logger.error("❌ No credentials found! Set FTTH_USERNAME and FTTH_PASSWORD")
+        return False
+    
+    try:
+        logger.info("🔐 Auto-login starting...")
+        
+        # Navigate to login page
+        await page.goto('https://admin.ftth.iq/auth/login', wait_until='networkidle', timeout=60000)
+        await asyncio.sleep(3)
+        
+        # Check if already on dashboard (session still valid)
+        if 'dashboard' in page.url:
+            logger.info("✅ Already logged in!")
+            return True
+        
+        # Angular Material selectors
+        username_selectors = [
+            'input[formcontrolname="Username"]',
+            'input[formcontrolname="username"]',
+            '#mat-input-0',
+        ]
+        
+        # Fill username
+        username_filled = False
+        for selector in username_selectors:
+            try:
+                await page.wait_for_selector(selector, state="visible", timeout=5000)
+                await page.fill(selector, FTTH_USERNAME)
+                logger.info(f"🔑 Username filled: {selector}")
+                username_filled = True
+                break
+            except:
+                continue
+        
+        if not username_filled:
+            logger.error("❌ Could not find username field")
+            return False
+        
+        # Fill password
+        password_selectors = [
+            'input[formcontrolname="Password"]',
+            'input[formcontrolname="password"]',
+            '#mat-input-1',
+            'input[type="password"]',
+        ]
+        for selector in password_selectors:
+            try:
+                await page.fill(selector, FTTH_PASSWORD)
+                logger.info("🔑 Password filled")
+                break
+            except:
+                continue
+        
+        # Submit
+        submit_selectors = [
+            'button.mat-raised-button',
+            'button.btn-xl',
+            'button:has-text("تسجيل الدخول")',
+        ]
+        for selector in submit_selectors:
+            try:
+                await page.click(selector)
+                logger.info("🔑 Form submitted")
+                break
+            except:
+                continue
+        
+        # Wait for dashboard
+        try:
+            await page.wait_for_url('**/dashboard', timeout=60000)
+            logger.info("✅ Auto-login successful!")
+            
+            # Save new session
+            await page.context.storage_state(path=str(SESSION_FILE))
+            logger.info("💾 New session saved")
+            
+            return True
+        except:
+            logger.error("❌ Login failed - check credentials")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Auto-login error: {e}")
+        return False
+
+
 async def browser_refresh_token(page) -> bool:
     """
     تجديد الـ Access Token عن طريق البراوزر
-    الموقع نفسه بيجدد التوكن - أأمن طريقة
+    لو الـ session انتهت، يسجل دخول تلقائي
     """
     try:
         logger.info("🔄 Attempting browser-based token refresh...")
@@ -51,9 +143,14 @@ async def browser_refresh_token(page) -> bool:
         # ⚠️ Check if redirected to SSO login (means refresh token expired)
         current_url = page.url
         if 'sso.ftth.iq' in current_url or 'auth/login' in current_url:
-            logger.error("❌ Redirected to login - Refresh Token expired!")
-            logger.error("   💡 You need to run extract_session.py locally")
-            return False
+            logger.warning("⚠️ Session expired - attempting auto-login...")
+            
+            # 🔐 Try auto-login with credentials
+            if await auto_login(page):
+                return True
+            else:
+                logger.error("❌ Auto-login failed!")
+                return False
         
         # Wait for the site's JavaScript to potentially refresh the token
         await asyncio.sleep(5)
