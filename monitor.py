@@ -37,79 +37,33 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-async def refresh_access_token() -> bool:
+async def browser_refresh_token(page) -> bool:
     """
-    تجديد الـ Access Token باستخدام Refresh Token
-    طريقة OAuth2 الرسمية - آمنة 100%
+    تجديد الـ Access Token عن طريق البراوزر
+    الموقع نفسه بيجدد التوكن - أأمن طريقة
     """
-    import aiohttp
-    
-    if not SESSION_FILE.exists():
-        logger.error("❌ No session file for token refresh")
-        return False
-    
     try:
-        # Load current session
-        state = json.loads(SESSION_FILE.read_text())
+        logger.info("🔄 Attempting browser-based token refresh...")
         
-        # Extract refresh_token from Playwright format
-        refresh_token = None
-        for origin in state.get('origins', []):
-            if 'ftth.iq' in origin.get('origin', ''):
-                for item in origin.get('localStorage', []):
-                    if item.get('name') == 'refresh_token':
-                        refresh_token = item.get('value')
-                        break
+        # Navigate to auth/refresh endpoint or just reload dashboard
+        # This triggers the site's built-in token refresh
+        await page.goto('https://admin.ftth.iq/dashboard', wait_until='networkidle', timeout=60000)
         
-        if not refresh_token:
-            logger.error("❌ No refresh_token found in session")
+        # Wait for the site's JavaScript to potentially refresh the token
+        await asyncio.sleep(5)
+        
+        # Check if we got a new token
+        new_token = await page.evaluate("localStorage.getItem('access_token')")
+        
+        if new_token:
+            logger.info("✅ Browser token refresh successful!")
+            return True
+        else:
+            logger.error("❌ No token after browser refresh")
             return False
-        
-        logger.info("🔄 Refreshing access token via OAuth2...")
-        
-        # Call Keycloak token endpoint
-        async with aiohttp.ClientSession() as session:
-            async with session.post(KEYCLOAK_TOKEN_URL, data={
-                'grant_type': 'refresh_token',
-                'refresh_token': refresh_token,
-                'client_id': KEYCLOAK_CLIENT_ID
-            }) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    logger.error(f"❌ Token refresh failed: {resp.status} - {error_text[:100]}")
-                    return False
-                
-                tokens = await resp.json()
-        
-        new_access_token = tokens.get('access_token')
-        new_refresh_token = tokens.get('refresh_token')
-        expires_in = tokens.get('expires_in', 3600)
-        
-        if not new_access_token:
-            logger.error("❌ No access_token in response")
-            return False
-        
-        # Update session file with new tokens
-        current_time = int(time.time() * 1000)
-        
-        for origin in state.get('origins', []):
-            if 'ftth.iq' in origin.get('origin', ''):
-                for item in origin.get('localStorage', []):
-                    if item.get('name') == 'access_token':
-                        item['value'] = new_access_token
-                    elif item.get('name') == 'refresh_token' and new_refresh_token:
-                        item['value'] = new_refresh_token
-                    elif item.get('name') == 'access_token_stored_at':
-                        item['value'] = str(current_time)
-                    elif item.get('name') == 'expires_at':
-                        item['value'] = str(current_time + (expires_in * 1000))
-        
-        SESSION_FILE.write_text(json.dumps(state, indent=2))
-        logger.info(f"✅ Token refreshed! Valid for {expires_in}s")
-        return True
-        
+            
     except Exception as e:
-        logger.error(f"❌ Token refresh error: {e}")
+        logger.error(f"❌ Browser refresh error: {e}")
         return False
 
 
@@ -296,16 +250,21 @@ class Monitor:
         # If token error, try refresh and retry once
         if result and 'error' in result and result['error'] in ['no_token', 401]:
             logger.info("🔄 Attempting automatic token refresh...")
-            if await refresh_access_token():
-                # Reload browser with new tokens
-                if self.browser:
-                    await self.browser.close()
-                if await self.setup():
-                    # Retry fetch with fresh token
-                    result = await self._fetch_api()
-                    if result and 'error' not in result:
-                        logger.info("✅ Retry successful after token refresh!")
-                        return result
+            
+            # Use browser-based refresh (not API call - Keycloak blocks datacenter IPs)
+            if await browser_refresh_token(self.page):
+                # Save the refreshed state
+                try:
+                    await self.ctx.storage_state(path=str(SESSION_FILE))
+                    logger.info("💾 Saved refreshed session")
+                except:
+                    pass
+                
+                # Retry API call with fresh token
+                result = await self._fetch_api()
+                if result and 'error' not in result:
+                    logger.info("✅ Retry successful after token refresh!")
+                    return result
             
             # If refresh failed, send telegram notification
             await self.telegram.send("""⚠️ <b>تنبيه: الجلسة انتهت!</b>
