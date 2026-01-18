@@ -262,10 +262,6 @@ class Monitor:
     async def setup(self):
         from playwright.async_api import async_playwright
         
-        if not SESSION_FILE.exists():
-            logger.error("❌ No session! Run: python extract_session.py")
-            return False
-        
         self.pw = await async_playwright().start()
         self.browser = await self.pw.chromium.launch(
             headless=True,
@@ -278,13 +274,21 @@ class Monitor:
             {'width': 1536, 'height': 864},
         ])
         
-        self.ctx = await self.browser.new_context(
-            viewport=vp,
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-            locale='ar-IQ',
-            timezone_id='Asia/Baghdad',
-            storage_state=str(SESSION_FILE)
-        )
+        # Create context with session if exists, otherwise empty
+        ctx_args = {
+            'viewport': vp,
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+            'locale': 'ar-IQ',
+            'timezone_id': 'Asia/Baghdad',
+        }
+        
+        if SESSION_FILE.exists():
+            ctx_args['storage_state'] = str(SESSION_FILE)
+            logger.info("📂 Using existing session")
+        else:
+            logger.warning("⚠️ No session file - will need to auto-login")
+        
+        self.ctx = await self.browser.new_context(**ctx_args)
         self.page = await self.ctx.new_page()
         await self.page.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         
