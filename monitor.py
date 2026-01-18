@@ -14,9 +14,13 @@ import time
 import random
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Set
+
+# Maximum age for a ticket to be considered "new" (in hours)
+# Prevents spam if known_tickets.json is reset
+MAX_TICKET_AGE_HOURS = 3
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -424,11 +428,30 @@ class Monitor:
             new = [t for t in items if t.get('displayId') and self.state.is_new(t['displayId'])]
             
             if new:
-                logger.info(f"🆕 {len(new)} NEW tickets!")
+                logger.info(f"🆕 {len(new)} NEW tickets found")
+                sent_count = 0
                 for t in new:
                     self.state.add(t['displayId'])
+                    
+                    # Time filter: only send notification for recent tickets
+                    try:
+                        created_at = t.get('createdAt', '')
+                        if created_at:
+                            ticket_time = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                            now = datetime.now(timezone.utc)
+                            age_hours = (now - ticket_time).total_seconds() / 3600
+                            
+                            if age_hours > MAX_TICKET_AGE_HOURS:
+                                logger.info(f"⏭️ Skipping old ticket {t['displayId']} (age: {age_hours:.1f}h)")
+                                continue
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not parse ticket date: {e}")
+                    
                     await self.telegram.send(self.telegram.format(t))
+                    sent_count += 1
                     await asyncio.sleep(random.uniform(1, 3))
+                
+                logger.info(f"📤 Sent {sent_count}/{len(new)} notifications")
             else:
                 logger.info("✅ No new tickets")
             
