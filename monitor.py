@@ -29,8 +29,88 @@ KNOWN_TICKETS_FILE = Path('known_tickets.json')
 DASHBOARD_URL = 'https://admin.ftth.iq/dashboard'
 API_URL = 'https://admin.ftth.iq/api/support/tickets'
 
+# OAuth2 Token Refresh (Keycloak)
+KEYCLOAK_TOKEN_URL = 'https://sso.ftth.iq/auth/realms/Partners/protocol/openid-connect/token'
+KEYCLOAK_CLIENT_ID = 'earthlink-portals'
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+async def refresh_access_token() -> bool:
+    """
+    تجديد الـ Access Token باستخدام Refresh Token
+    طريقة OAuth2 الرسمية - آمنة 100%
+    """
+    import aiohttp
+    
+    if not SESSION_FILE.exists():
+        logger.error("❌ No session file for token refresh")
+        return False
+    
+    try:
+        # Load current session
+        state = json.loads(SESSION_FILE.read_text())
+        
+        # Extract refresh_token from Playwright format
+        refresh_token = None
+        for origin in state.get('origins', []):
+            if 'ftth.iq' in origin.get('origin', ''):
+                for item in origin.get('localStorage', []):
+                    if item.get('name') == 'refresh_token':
+                        refresh_token = item.get('value')
+                        break
+        
+        if not refresh_token:
+            logger.error("❌ No refresh_token found in session")
+            return False
+        
+        logger.info("🔄 Refreshing access token via OAuth2...")
+        
+        # Call Keycloak token endpoint
+        async with aiohttp.ClientSession() as session:
+            async with session.post(KEYCLOAK_TOKEN_URL, data={
+                'grant_type': 'refresh_token',
+                'refresh_token': refresh_token,
+                'client_id': KEYCLOAK_CLIENT_ID
+            }) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    logger.error(f"❌ Token refresh failed: {resp.status} - {error_text[:100]}")
+                    return False
+                
+                tokens = await resp.json()
+        
+        new_access_token = tokens.get('access_token')
+        new_refresh_token = tokens.get('refresh_token')
+        expires_in = tokens.get('expires_in', 3600)
+        
+        if not new_access_token:
+            logger.error("❌ No access_token in response")
+            return False
+        
+        # Update session file with new tokens
+        current_time = int(time.time() * 1000)
+        
+        for origin in state.get('origins', []):
+            if 'ftth.iq' in origin.get('origin', ''):
+                for item in origin.get('localStorage', []):
+                    if item.get('name') == 'access_token':
+                        item['value'] = new_access_token
+                    elif item.get('name') == 'refresh_token' and new_refresh_token:
+                        item['value'] = new_refresh_token
+                    elif item.get('name') == 'access_token_stored_at':
+                        item['value'] = str(current_time)
+                    elif item.get('name') == 'expires_at':
+                        item['value'] = str(current_time + (expires_in * 1000))
+        
+        SESSION_FILE.write_text(json.dumps(state, indent=2))
+        logger.info(f"✅ Token refreshed! Valid for {expires_in}s")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Token refresh error: {e}")
+        return False
 
 
 def random_delay(min_s: float, max_s: float):
@@ -154,7 +234,8 @@ class Monitor:
         logger.info(f"✅ Browser ready ({vp['width']}x{vp['height']})")
         return True
     
-    async def fetch(self) -> Optional[Dict]:
+    async def _fetch_api(self) -> Optional[Dict]:
+        """Internal API fetch - does NOT retry"""
         try:
             await self.page.goto(DASHBOARD_URL, wait_until='domcontentloaded', timeout=120000)
             
@@ -192,17 +273,8 @@ class Monitor:
             
             if 'error' in result:
                 logger.error(f"❌ API: {result['error']}")
-                if result['error'] in ['no_token', 401]:
-                    await self.telegram.send("""⚠️ <b>تنبيه: الجلسة انتهت!</b>
-━━━━━━━━━━━━━━━━━
-❌ النظام لم يستطع الدخول.
-ربما تم تغيير كلمة المرور أو تسجيل الخروج.
-
-🛠️ <b>الحل المطلوب:</b>
-1. استخرج Session جديد باستخدام <code>extract_session.py</code>
-2. ارفع الملف <code>browser_state.json</code> إلى GitHub يدويًا.
-━━━━━━━━━━━━━━━━━""")
-                return None
+                # Token errors are handled by the fetch() wrapper
+                return result
             
             # Save updated session (tokens may have refreshed)
             try:
@@ -216,6 +288,38 @@ class Monitor:
         except Exception as e:
             logger.error(f"❌ {e}")
             return None
+    
+    async def fetch(self) -> Optional[Dict]:
+        """Fetch tickets with automatic token refresh on failure"""
+        result = await self._fetch_api()
+        
+        # If token error, try refresh and retry once
+        if result and 'error' in result and result['error'] in ['no_token', 401]:
+            logger.info("🔄 Attempting automatic token refresh...")
+            if await refresh_access_token():
+                # Reload browser with new tokens
+                if self.browser:
+                    await self.browser.close()
+                if await self.setup():
+                    # Retry fetch with fresh token
+                    result = await self._fetch_api()
+                    if result and 'error' not in result:
+                        logger.info("✅ Retry successful after token refresh!")
+                        return result
+            
+            # If refresh failed, send telegram notification
+            await self.telegram.send("""⚠️ <b>تنبيه: الجلسة انتهت!</b>
+━━━━━━━━━━━━━━━━━
+❌ النظام لم يستطع تجديد التوكن تلقائياً.
+الـ Refresh Token ربما انتهى (8 أيام).
+
+🛠️ <b>الحل المطلوب:</b>
+1. استخرج Session جديد باستخدام <code>extract_session.py</code>
+2. ارفع الملف <code>browser_state.json</code> إلى GitHub يدويًا.
+━━━━━━━━━━━━━━━━━""")
+            return None
+        
+        return result
     
     async def run(self):
         logger.info("=" * 50)
