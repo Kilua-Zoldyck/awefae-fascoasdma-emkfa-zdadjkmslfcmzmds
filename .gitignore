@@ -20,3 +20,6 @@ json
 login_failed.png
 simulate_new_ticket.py
 test_local.fish
+browser_state.json
+session.json
+known_tickets.json
