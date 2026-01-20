@@ -972,6 +972,14 @@ class Monitor:
                         logger.info("✅ No subscription changes")
                     
                     self.subscription_state.save()
+
+            # Define variables for report safely
+            sub_count = len(self.subscription_state.subscriptions)
+            new_tickets = len(new) if 'new' in locals() else 0
+            expired_count = len(expired) if 'expired' in locals() else 0
+            renewed_count = len(renewed) if 'renewed' in locals() else 0
+            new_subs_count = len(new_subs) if 'new_subs' in locals() else 0
+
             await self.telegram.send_to_dev(f"""📊 <b>FTTH Monitor Run Summary</b>
 ━━━━━━━━━━━━━━━━━
 
