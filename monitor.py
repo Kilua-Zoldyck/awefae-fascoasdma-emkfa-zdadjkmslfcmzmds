@@ -369,20 +369,24 @@ class Telegram:
         data['sub_id'] = sub.get('self', {}).get('id') or sub.get('id', 'N/A')
         data['customer'] = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
         
-        # Service Plan Fallbacks
-        data['service'] = (
-            sub.get('servicePlan', {}).get('displayValue') or 
-            sub.get('serviceName') or 
-            sub.get('planName') or 
-            sub.get('product', {}).get('displayValue') or
-            'N/A'
-        )
+        # Service Plan Extraction (from 'services' array or 'bundle')
+        services = []
+        if 'services' in sub and isinstance(sub['services'], list):
+            services = [s.get('displayValue', '') for s in sub['services'] if s.get('displayValue')]
         
-        # Expiry Date Fallbacks
+        bundle = sub.get('bundle', {}).get('displayValue', '')
+        
+        if services:
+            # Combine Bundle + Main Service (e.g. "FTTH Basic - FIBER 35")
+            main_service = services[0] 
+            data['service'] = f"{bundle} - {main_service}" if bundle else main_service
+        else:
+            data['service'] = bundle or sub.get('servicePlan', {}).get('displayValue', 'N/A')
+        
+        # Expiry Date Extraction (Correct key is 'expires')
         expiry_raw = (
+            sub.get('expires') or 
             sub.get('expiryDate') or 
-            sub.get('expirationDate') or 
-            sub.get('endDate') or 
             sub.get('validUntil')
         )
         data['expiry'] = expiry_raw[:10] if expiry_raw else 'N/A'
