@@ -345,11 +345,15 @@ class Telegram:
         def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
         st = t.get('status', 'N/A')
         em = {'Open':'🔴','In Progress':'🟡','In progress':'🟡','Resolved':'🟢','Closed':'⚫'}.get(st,'⚪')
+        ticket_time = datetime.fromisoformat(t.get('createdAt', '').replace('Z', '+00:00'))
+        local_time = ticket_time.astimezone(timezone(timedelta(hours=3)))
+        formatted_time = local_time.strftime('%Y-%m-%d %H:%M:%S')
+
         return f"""<b>🔔 تنبيه SLA جديد</b>
 ━━━━━━━━━━━━━━━━━
 
 🎫 <b>رقم التذكرة:</b> {t.get('displayId', 'N/A')}
-🕐 <b>التاريخ:</b> {t.get('createdAt', '')[:19].replace('T', ' ')}
+🕐 <b>التاريخ:</b> {formatted_time}
 
 🆔 <b>معرف الوكيل:</b> {t.get('partner', {}).get('id', '')}
 👤 <b>اسم الوكيل:</b> {e(t.get('partner', {}).get('displayValue', ''))}
