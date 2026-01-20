@@ -533,6 +533,73 @@ class WhatsApp:
 🔗 https://admin.ftth.iq/tickets/details/{t.get('self', {}).get('id', '')}
 ━━━━━━━━━━━━━━━━━"""
 
+    async def send_template(self, template_name: str, variable_text: str) -> bool:
+        """Send a template message (required for notifications > 24h)"""
+        if not self.enabled:
+            return True
+        import aiohttp
+        try:
+            url = f"https://graph.facebook.com/v22.0/{self.phone_id}/messages"
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": self.recipient,
+                "type": "template",
+                "template": {
+                    "name": template_name,
+                    "language": {"code": "ar"},
+                    "components": [
+                        {
+                            "type": "body",
+                            "parameters": [
+                                {
+                                    "type": "text",
+                                    "text": variable_text
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    if response.status == 200:
+                        logger.info(f"📱 WhatsApp Template '{template_name}' sent!")
+                        return True
+                    else:
+                        error = await response.text()
+                        logger.warning(f"⚠️ WhatsApp Template error: {response.status} - {error}")
+                        return False
+        except Exception as e:
+            logger.warning(f"⚠️ WhatsApp send error: {e}")
+            return False
+
+    def format_simple(self, sub: Dict) -> str:
+        """Simple format for batched messages"""
+        data = self._extract_common_data(sub) # Helper needs to be available or duplicated
+        return f"🆔 {data['sub_id']} | 👤 {data['customer']} | 📦 {data['service']}"
+
+    # Helper to extract common data (duplicated from Telegram class to keep classes independent)
+    def _extract_common_data(self, sub: Dict) -> Dict:
+        data = {}
+        data['sub_id'] = sub.get('self', {}).get('id') or sub.get('id', 'N/A')
+        data['customer'] = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
+        services = []
+        if 'services' in sub and isinstance(sub['services'], list):
+            services = [s.get('displayValue', '') for s in sub['services'] if s.get('displayValue')]
+        bundle = sub.get('bundle', {}).get('displayValue', '')
+        if services:
+            main_service = services[0] 
+            data['service'] = f"{bundle} - {main_service}" if bundle else main_service
+        else:
+            data['service'] = bundle or sub.get('servicePlan', {}).get('displayValue', 'N/A')
+        return data
+
 
 class Monitor:
     def __init__(self):
@@ -544,6 +611,7 @@ class Monitor:
         self.ctx = None
         self.page = None
         self.report_buffer = []
+        self.whatsapp_buffer = [] # Buffer for periodic WhatsApp updates
 
     def log_report(self, msg: str):
         """Add message to execution report"""
@@ -744,6 +812,7 @@ class Monitor:
     
     async def run(self):
         self.report_buffer = []
+        self.whatsapp_buffer = []  # Reset batch buffer
         logger.info("=" * 50)
         logger.info("🚀 FTTH Monitor")
         logger.info("=" * 50)
@@ -813,13 +882,17 @@ class Monitor:
                     except Exception as e:
                         logger.warning(f"⚠️ Could not parse ticket date: {e}")
                     
-                    # Send notifications to BOTH client AND developer
+                    # 1. Telegram: Instant Notification (UNTOUCHED)
                     await self.telegram.send_to_all(self.telegram.format(t))
-                    await self.whatsapp.send_ticket(t)
+                    
+                    # 2. WhatsApp: Buffer for batch sending
+                    wa_msg = self.whatsapp.format(t)
+                    self.whatsapp_buffer.append(wa_msg)
+                    
                     sent_count += 1
                     await asyncio.sleep(random.uniform(1, 3))
                 
-                logger.info(f"📤 Sent {sent_count}/{len(new)} notifications")
+                logger.info(f"📤 Processed {sent_count}/{len(new)} tickets")
             else:
                 logger.info("✅ No new tickets")
             
@@ -863,43 +936,42 @@ class Monitor:
                     # Send notifications for expired subscriptions
                     for sub in expired:
                         logger.info(f"🔴 Expired: {sub.get('id', 'N/A')}")
-                        await self.telegram.send_to_all(self.telegram.format_expired(sub))
+                        msg = self.telegram.format_expired(sub)
+                        await self.telegram.send_to_all(msg)
+                        
+                        # Buffer for WhatsApp
+                        self.whatsapp_buffer.append(f"🔴 *اشتراك منتهي*\n{self.whatsapp.format_simple(sub)}")
                         await asyncio.sleep(random.uniform(0.5, 1.5))
                     
                     # Send notifications for renewed subscriptions
                     for sub in renewed:
                         logger.info(f"🟢 Renewed: {sub.get('id', 'N/A')}")
-                        await self.telegram.send_to_all(self.telegram.format_renewed(sub))
+                        msg = self.telegram.format_renewed(sub)
+                        await self.telegram.send_to_all(msg)
+                        
+                        # Buffer for WhatsApp
+                        self.whatsapp_buffer.append(f"🟢 *تم التجديد*\n{self.whatsapp.format_simple(sub)}")
                         await asyncio.sleep(random.uniform(0.5, 1.5))
                     
                     # Send notifications for new subscribers
                     for sub in new_subs:
                         logger.info(f"🆕 New subscriber: {sub.get('id', 'N/A')}")
-                        await self.telegram.send_to_all(self.telegram.format_new_subscriber(sub))
+                        msg = self.telegram.format_new_subscriber(sub)
+                        await self.telegram.send_to_all(msg)
+                        
+                        # Buffer for WhatsApp
+                        self.whatsapp_buffer.append(f"🆕 *مشترك جديد*\n{self.whatsapp.format_simple(sub)}")
                         await asyncio.sleep(random.uniform(0.5, 1.5))
 
 
                     
                     # Log summary
                     if expired or renewed or new_subs:
-                        logger.info(f"📊 Changes: {len(expired)} expired, {len(renewed)} renewed, {len(new_subs)} new")
+                        self.log_report(f"📊 Changes: {len(expired)} expired, {len(renewed)} renewed, {len(new_subs)} new")
                     else:
                         logger.info("✅ No subscription changes")
                     
                     self.subscription_state.save()
-            
-            # Send execution report to DEV (Run Log)
-            if self.report_buffer:
-                report_text = "<b>📊 تقرير التشغيل (Run Log)</b>\n━━━━━━━━━━━━━━━━━\n" + "\n".join(self.report_buffer)
-                await self.telegram.send_to_dev(report_text)
-
-            # 📊 Send Run Summary to DEVELOPER only (every run)
-            sub_count = len(self.subscription_state.subscriptions) if hasattr(self, 'subscription_state') else 0
-            new_tickets = len(new) if 'new' in dir() else 0
-            expired_count = len(expired) if 'expired' in dir() else 0
-            renewed_count = len(renewed) if 'renewed' in dir() else 0
-            new_subs_count = len(new_subs) if 'new_subs' in dir() else 0
-            
             await self.telegram.send_to_dev(f"""📊 <b>FTTH Monitor Run Summary</b>
 ━━━━━━━━━━━━━━━━━
 
