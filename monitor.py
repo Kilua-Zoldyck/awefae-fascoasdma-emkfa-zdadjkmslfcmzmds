@@ -49,11 +49,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-async def auto_login(page) -> bool:
+async def auto_login(page, report_callback=None) -> bool:
     """
     تسجيل دخول تلقائي بالـ Username/Password
     يُستخدم عندما تنتهي الـ session
     """
+    if report_callback: report_callback("🔐 Auto-login starting...")
     if not FTTH_USERNAME or not FTTH_PASSWORD:
         logger.error("❌ No credentials found! Set FTTH_USERNAME and FTTH_PASSWORD")
         return False
@@ -130,6 +131,7 @@ async def auto_login(page) -> bool:
             # Save new session
             await page.context.storage_state(path=str(SESSION_FILE))
             logger.info("💾 New session saved")
+            if report_callback: report_callback("✅ Auto-login successful!")
             
             return True
         except:
@@ -141,13 +143,14 @@ async def auto_login(page) -> bool:
         return False
 
 
-async def browser_refresh_token(page) -> bool:
+async def browser_refresh_token(page, report_callback=None) -> bool:
     """
     تجديد الـ Access Token عن طريق البراوزر
     لو الـ session انتهت، يسجل دخول تلقائي
     """
     try:
         logger.info("🔄 Attempting browser-based token refresh...")
+        if report_callback: report_callback("🔄 Refreshing token...")
         
         # Navigate to dashboard - this triggers the site's built-in token refresh
         await page.goto('https://admin.ftth.iq/dashboard', wait_until='networkidle', timeout=60000)
@@ -158,7 +161,7 @@ async def browser_refresh_token(page) -> bool:
             logger.warning("⚠️ Session expired - attempting auto-login...")
             
             # 🔐 Try auto-login with credentials
-            if await auto_login(page):
+            if await auto_login(page, report_callback):
                 return True
             else:
                 logger.error("❌ Auto-login failed!")
@@ -172,6 +175,7 @@ async def browser_refresh_token(page) -> bool:
         
         if new_token:
             logger.info("✅ Browser token refresh successful!")
+            if report_callback: report_callback("✅ Token refresh success")
             return True
         else:
             logger.error("❌ No token after browser refresh")
@@ -255,7 +259,7 @@ class SubscriptionState:
         new_subs = []  # New subscriptions
         
         for sub in current_subscriptions:
-            sub_id = sub.get('id') or sub.get('subscriptionId', '')
+            sub_id = sub.get('self', {}).get('id') or sub.get('id')
             current_status = sub.get('status', '').lower()
             
             if not sub_id:
@@ -355,7 +359,7 @@ class Telegram:
         def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
         
         # Extract subscription data
-        sub_id = sub.get('id') or sub.get('subscriptionId', 'N/A')
+        sub_id = sub.get('self', {}).get('id') or sub.get('id', 'N/A')
         customer = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
         service = sub.get('servicePlan', {}).get('displayValue', '') or sub.get('serviceName', 'N/A')
         expiry = sub.get('expiryDate', '')[:10] if sub.get('expiryDate') else 'N/A'
@@ -380,7 +384,7 @@ class Telegram:
         def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
         
         # Extract subscription data
-        sub_id = sub.get('id') or sub.get('subscriptionId', 'N/A')
+        sub_id = sub.get('self', {}).get('id') or sub.get('id', 'N/A')
         customer = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
         service = sub.get('servicePlan', {}).get('displayValue', '') or sub.get('serviceName', 'N/A')
         expiry = sub.get('expiryDate', '')[:10] if sub.get('expiryDate') else 'N/A'
@@ -405,7 +409,7 @@ class Telegram:
         def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
         
         # Extract subscription data
-        sub_id = sub.get('id') or sub.get('subscriptionId', 'N/A')
+        sub_id = sub.get('self', {}).get('id') or sub.get('id', 'N/A')
         customer = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
         service = sub.get('servicePlan', {}).get('displayValue', '') or sub.get('serviceName', 'N/A')
         expiry = sub.get('expiryDate', '')[:10] if sub.get('expiryDate') else 'N/A'
@@ -520,6 +524,11 @@ class Monitor:
         self.browser = None
         self.ctx = None
         self.page = None
+        self.report_buffer = []
+
+    def log_report(self, msg: str):
+        """Add message to execution report"""
+        self.report_buffer.append(msg)
     
     async def setup(self):
         from playwright.async_api import async_playwright
@@ -547,8 +556,10 @@ class Monitor:
         if SESSION_FILE.exists():
             ctx_args['storage_state'] = str(SESSION_FILE)
             logger.info("📂 Using existing session")
+            self.log_report("📂 Session: Found existing file")
         else:
             logger.warning("⚠️ No session file - will need to auto-login")
+            self.log_report("⚠️ Session: No file, new login needed")
         
         self.ctx = await self.browser.new_context(**ctx_args)
         self.page = await self.ctx.new_page()
@@ -621,7 +632,7 @@ class Monitor:
             logger.info("🔄 Attempting automatic token refresh...")
             
             # Use browser-based refresh (not API call - Keycloak blocks datacenter IPs)
-            if await browser_refresh_token(self.page):
+            if await browser_refresh_token(self.page, self.log_report):
                 # Save the refreshed state
                 try:
                     await self.ctx.storage_state(path=str(SESSION_FILE))
@@ -650,43 +661,70 @@ class Monitor:
         return result
     
     async def _fetch_subscriptions_api(self) -> Optional[Dict]:
-        """Fetch subscriptions from API"""
-        try:
-            result = await self.page.evaluate(f"""
-                (async()=>{{
-                    try{{
-                        let token = localStorage.getItem('access_token');
-                        if (!token) return {{error:'no_token'}};
-                        
-                        let r = await fetch('{SUBSCRIPTIONS_API_URL}?pageSize=100&pageNumber=1',{{
-                            headers:{{'Authorization':'Bearer '+token,'Accept':'application/json'}}
-                        }});
-                        
-                        if (r.status === 401) {{
-                            await new Promise(x=>setTimeout(x,2000));
-                            token = localStorage.getItem('access_token');
-                            r = await fetch('{SUBSCRIPTIONS_API_URL}?pageSize=100&pageNumber=1',{{
+        """Fetch ALL subscriptions from API (Pagination Support)"""
+        all_items = []
+        page = 1
+        page_size = 100
+        total_count = 0
+        
+        logger.info("📦 Fetching subscription list...")
+        
+        while True:
+            try:
+                # Add random small delay between pages
+                if page > 1: await asyncio.sleep(random.uniform(0.5, 1.5))
+                
+                result = await self.page.evaluate(f"""
+                    (async()=>{{
+                        try{{
+                            let token = localStorage.getItem('access_token');
+                            if (!token) return {{error:'no_token'}};
+                            
+                            let r = await fetch('{SUBSCRIPTIONS_API_URL}?pageSize={page_size}&pageNumber={page}',{{
                                 headers:{{'Authorization':'Bearer '+token,'Accept':'application/json'}}
                             }});
-                        }}
-                        
-                        return r.ok ? await r.json() : {{error:r.status}};
-                    }}catch(e){{return {{error:e.message}};}}
-                }})()
-            """)
-            
-            if 'error' in result:
-                logger.error(f"❌ Subscriptions API: {result['error']}")
+                            
+                            if (r.status === 401) {{
+                                await new Promise(x=>setTimeout(x,2000));
+                                token = localStorage.getItem('access_token');
+                                r = await fetch('{SUBSCRIPTIONS_API_URL}?pageSize={page_size}&pageNumber={page}',{{
+                                    headers:{{'Authorization':'Bearer '+token,'Accept':'application/json'}}
+                                }});
+                            }}
+                            
+                            return r.ok ? await r.json() : {{error:r.status}};
+                        }}catch(e){{return {{error:e.message}};}}
+                    }})()
+                """)
+                
+                if 'error' in result:
+                    logger.error(f"❌ Subscriptions Page {page}: {result['error']}")
+                    # If first page fails, abort. If subsequent, return what we have? 
+                    # Better to return None to trigger retry or avoid partial data.
+                    return None
+                
+                items = result.get('items', [])
+                count = len(items)
+                total_count = result.get('totalCount', 0)
+                
+                all_items.extend(items)
+                logger.debug(f"📄 Page {page}: Got {count} items (Total so far: {len(all_items)})")
+                
+                # Check termination
+                if count < page_size or len(all_items) >= total_count:
+                    break
+                    
+                page += 1
+                
+            except Exception as e:
+                logger.error(f"❌ Subscriptions fetch error on page {page}: {e}")
                 return None
-            
-            logger.info(f"✅ Got {len(result.get('items',[]))} subscriptions")
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ Subscriptions fetch error: {e}")
-            return None
+        
+        logger.info(f"✅ Fetched ALL subscriptions: {len(all_items)}/{total_count}")
+        return {'items': all_items, 'totalCount': total_count}
     
     async def run(self):
+        self.report_buffer = []
         logger.info("=" * 50)
         logger.info("🚀 FTTH Monitor")
         logger.info("=" * 50)
@@ -699,9 +737,11 @@ class Monitor:
         try:
             result = await self.fetch()
             if not result:
+                self.log_report("❌ Fetch Failed")
                 return False
             
             items = result.get('items', [])
+            self.log_report(f"📊 Tickets: {len(items)} fetched")
             
             # First run: mark all as known
             if len(self.state.known) == 0:
@@ -724,6 +764,7 @@ class Monitor:
             
             if new:
                 logger.info(f"🆕 {len(new)} NEW tickets found")
+                self.log_report(f"🆕 Found {len(new)} NEW tickets")
                 sent_count = 0
                 for t in new:
                     self.state.add(t['displayId'])
@@ -763,12 +804,13 @@ class Monitor:
             sub_result = await self._fetch_subscriptions_api()
             if sub_result:
                 subscriptions = sub_result.get('items', [])
+                self.log_report(f"📦 Subscriptions: {len(subscriptions)} fetched")
                 
                 # First run: save all subscription statuses
                 if len(self.subscription_state.subscriptions) == 0:
                     logger.info("🎯 First run - saving subscription states")
                     for sub in subscriptions:
-                        sub_id = sub.get('id') or sub.get('subscriptionId', '')
+                        sub_id = sub.get('self', {}).get('id') or sub.get('id')
                         status = sub.get('status', '').lower()
                         if status in ['active', 'نشط', 'جاري']:
                             status = 'active'
@@ -799,6 +841,8 @@ class Monitor:
                         logger.info(f"🆕 New subscriber: {sub.get('id', 'N/A')}")
                         await self.telegram.send_to_all(self.telegram.format_new_subscriber(sub))
                         await asyncio.sleep(random.uniform(0.5, 1.5))
+
+
                     
                     # Log summary
                     if expired or renewed or new_subs:
@@ -808,6 +852,11 @@ class Monitor:
                     
                     self.subscription_state.save()
             
+            # Send execution report to DEV (Run Log)
+            if self.report_buffer:
+                report_text = "<b>📊 تقرير التشغيل (Run Log)</b>\n━━━━━━━━━━━━━━━━━\n" + "\n".join(self.report_buffer)
+                await self.telegram.send_to_dev(report_text)
+
             # 📊 Send Run Summary to DEVELOPER only (every run)
             sub_count = len(self.subscription_state.subscriptions) if hasattr(self, 'subscription_state') else 0
             new_tickets = len(new) if 'new' in dir() else 0
