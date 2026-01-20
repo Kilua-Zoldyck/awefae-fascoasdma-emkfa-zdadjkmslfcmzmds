@@ -20,7 +20,8 @@ from typing import Dict, Optional, Set
 
 # Maximum age for a ticket to be considered "new" (in hours)
 # Prevents spam if known_tickets.json is reset
-MAX_TICKET_AGE_HOURS = 3
+# Increased to 24h to handle GitHub Actions delays
+MAX_TICKET_AGE_HOURS = 24
 
 from dotenv import load_dotenv
 load_dotenv()
