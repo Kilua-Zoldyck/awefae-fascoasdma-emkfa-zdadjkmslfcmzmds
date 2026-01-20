@@ -5,6 +5,7 @@ __pycache__/
 
 # State files (kept as artifacts)
 known_tickets.json
+known_subscriptions.json
 browser_state.json
 session.json
 

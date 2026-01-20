@@ -56,8 +56,12 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+          DEV_CHAT_ID: ${{ secrets.DEV_CHAT_ID }}
           FTTH_USERNAME: ${{ secrets.FTTH_USERNAME }}
           FTTH_PASSWORD: ${{ secrets.FTTH_PASSWORD }}
+          WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+          WHATSAPP_PHONE_ID: ${{ secrets.WHATSAPP_PHONE_ID }}
+          WHATSAPP_RECIPIENT: ${{ secrets.WHATSAPP_RECIPIENT }}
         run: python monitor.py
 
       - name: 💾 Save state
@@ -67,6 +71,7 @@ jobs:
           name: ftth-state
           path: |
             known_tickets.json
+            known_subscriptions.json
             browser_state.json
           retention-days: 90
           overwrite: true

@@ -27,11 +27,19 @@ load_dotenv()
 
 # Config
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '')
-TELEGRAM_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')
+TELEGRAM_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')      # العميل - إشعارات التذاكر والاشتراكات
+DEV_CHAT_ID = os.getenv('DEV_CHAT_ID', '')              # المطور - إشعارات النظام والأخطاء
 SESSION_FILE = Path('browser_state.json')
 KNOWN_TICKETS_FILE = Path('known_tickets.json')
+KNOWN_SUBSCRIPTIONS_FILE = Path('known_subscriptions.json')
 DASHBOARD_URL = 'https://admin.ftth.iq/dashboard'
 API_URL = 'https://admin.ftth.iq/api/support/tickets'
+SUBSCRIPTIONS_API_URL = 'https://admin.ftth.iq/api/subscriptions'
+
+# 📱 WhatsApp Business API Config
+WHATSAPP_PHONE_ID = os.getenv('WHATSAPP_PHONE_ID', '')  # Phone Number ID from Meta
+WHATSAPP_TOKEN = os.getenv('WHATSAPP_TOKEN', '')        # Permanent Access Token
+WHATSAPP_RECIPIENT = os.getenv('WHATSAPP_RECIPIENT', '')  # Recipient phone (e.g., 96477666774444)
 
 # 🔐 Auto-Login Credentials (from GitHub Secrets)
 FTTH_USERNAME = os.getenv('FTTH_USERNAME', '')
@@ -213,13 +221,79 @@ class TicketState:
         self.known.add(tid)
 
 
+class SubscriptionState:
+    """
+    تتبع حالة الاشتراكات لاكتشاف التغييرات
+    Tracks subscription statuses to detect changes (Active ↔ Expired)
+    """
+    def __init__(self):
+        # Dict of subscription_id -> status
+        self.subscriptions: Dict[str, str] = {}
+        if KNOWN_SUBSCRIPTIONS_FILE.exists():
+            try:
+                data = json.loads(KNOWN_SUBSCRIPTIONS_FILE.read_text())
+                self.subscriptions = data.get('subscriptions', {})
+                logger.info(f"📂 Loaded {len(self.subscriptions)} known subscriptions")
+            except:
+                pass
+    
+    def save(self):
+        KNOWN_SUBSCRIPTIONS_FILE.write_text(json.dumps({
+            'subscriptions': self.subscriptions,
+            'updated': datetime.now().isoformat(),
+            'count': len(self.subscriptions)
+        }, indent=2, ensure_ascii=False))
+        logger.info(f"💾 Saved {len(self.subscriptions)} subscriptions")
+    
+    def get_changes(self, current_subscriptions: list) -> tuple:
+        """
+        مقارنة الحالة الحالية بالمخزنة واكتشاف التغييرات
+        Returns: (expired_list, renewed_list, new_list)
+        """
+        expired = []   # Active → Expired
+        renewed = []   # Expired → Active
+        new_subs = []  # New subscriptions
+        
+        for sub in current_subscriptions:
+            sub_id = sub.get('id') or sub.get('subscriptionId', '')
+            current_status = sub.get('status', '').lower()
+            
+            if not sub_id:
+                continue
+            
+            # Normalize status
+            if current_status in ['active', 'نشط', 'جاري']:
+                current_status = 'active'
+            elif current_status in ['expired', 'منتهي', 'منتهية']:
+                current_status = 'expired'
+            
+            old_status = self.subscriptions.get(sub_id)
+            
+            if old_status is None:
+                # New subscription
+                new_subs.append(sub)
+                self.subscriptions[sub_id] = current_status
+            elif old_status != current_status:
+                # Status changed!
+                if old_status == 'active' and current_status == 'expired':
+                    expired.append(sub)
+                elif old_status == 'expired' and current_status == 'active':
+                    renewed.append(sub)
+                self.subscriptions[sub_id] = current_status
+        
+        return expired, renewed, new_subs
+
+
 class Telegram:
     def __init__(self):
         self.token = TELEGRAM_TOKEN
         self.chat_id = TELEGRAM_CHAT_ID
+        self.dev_chat_id = DEV_CHAT_ID
         self.enabled = bool(self.token and self.chat_id)
+        self.dev_enabled = bool(self.token and self.dev_chat_id)
     
     async def send(self, text: str) -> bool:
+        """Send notification to CLIENT (tickets, subscriptions)"""
         if not self.enabled:
             return True
         import aiohttp
@@ -231,6 +305,28 @@ class Telegram:
                     return r.status == 200
         except:
             return False
+    
+    async def send_to_dev(self, text: str) -> bool:
+        """Send notification to DEVELOPER only (system errors, session expired)"""
+        if not self.dev_enabled:
+            return True
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
+                    json={'chat_id': self.dev_chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True}
+                ) as r:
+                    return r.status == 200
+        except:
+            return False
+    
+    async def send_to_all(self, text: str) -> bool:
+        """Send notification to BOTH client AND developer (monitoring alerts)"""
+        # Send to client
+        await self.send(text)
+        # Also send to developer
+        await self.send_to_dev(text)
+        return True
     
     def format(self, t: Dict) -> str:
         def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
@@ -253,12 +349,174 @@ class Telegram:
 
 🔗 <a href="https://admin.ftth.iq/tickets/details/{t.get('self', {}).get('id', '')}">فتح التذكرة</a>
 ━━━━━━━━━━━━━━━━━"""
+    
+    def format_expired(self, sub: Dict) -> str:
+        """Format expired subscription notification"""
+        def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
+        
+        # Extract subscription data
+        sub_id = sub.get('id') or sub.get('subscriptionId', 'N/A')
+        customer = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
+        service = sub.get('servicePlan', {}).get('displayValue', '') or sub.get('serviceName', 'N/A')
+        expiry = sub.get('expiryDate', '')[:10] if sub.get('expiryDate') else 'N/A'
+        zone = sub.get('zone', {}).get('displayValue', '') or sub.get('zoneName', 'N/A')
+        
+        return f"""<b>🔴 اشتراك منتهي</b>
+━━━━━━━━━━━━━━━━━
+
+🆔 <b>رمز الاشتراك:</b> {e(sub_id)}
+👤 <b>المشترك:</b> {e(customer)}
+📦 <b>الخدمة:</b> {e(service)}
+📅 <b>تاريخ الانتهاء:</b> {expiry}
+📍 <b>المنطقة:</b> {e(zone)}
+
+⚠️ <b>الحالة:</b> منتهي الصلاحية
+
+🔗 <a href="https://admin.ftth.iq/subscriptions">فتح الاشتراكات</a>
+━━━━━━━━━━━━━━━━━"""
+    
+    def format_renewed(self, sub: Dict) -> str:
+        """Format renewed subscription notification"""
+        def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
+        
+        # Extract subscription data
+        sub_id = sub.get('id') or sub.get('subscriptionId', 'N/A')
+        customer = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
+        service = sub.get('servicePlan', {}).get('displayValue', '') or sub.get('serviceName', 'N/A')
+        expiry = sub.get('expiryDate', '')[:10] if sub.get('expiryDate') else 'N/A'
+        zone = sub.get('zone', {}).get('displayValue', '') or sub.get('zoneName', 'N/A')
+        
+        return f"""<b>🟢 تم التجديد</b>
+━━━━━━━━━━━━━━━━━
+
+🆔 <b>رمز الاشتراك:</b> {e(sub_id)}
+👤 <b>المشترك:</b> {e(customer)}
+📦 <b>الخدمة:</b> {e(service)}
+📅 <b>صالح حتى:</b> {expiry}
+📍 <b>المنطقة:</b> {e(zone)}
+
+✅ <b>الحالة:</b> تم التجديد بنجاح
+
+🔗 <a href="https://admin.ftth.iq/subscriptions">فتح الاشتراكات</a>
+━━━━━━━━━━━━━━━━━"""
+    
+    def format_new_subscriber(self, sub: Dict) -> str:
+        """Format new subscriber notification"""
+        def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
+        
+        # Extract subscription data
+        sub_id = sub.get('id') or sub.get('subscriptionId', 'N/A')
+        customer = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
+        service = sub.get('servicePlan', {}).get('displayValue', '') or sub.get('serviceName', 'N/A')
+        expiry = sub.get('expiryDate', '')[:10] if sub.get('expiryDate') else 'N/A'
+        zone = sub.get('zone', {}).get('displayValue', '') or sub.get('zoneName', 'N/A')
+        status = sub.get('status', 'N/A')
+        status_emoji = "🟢" if status.lower() in ['active', 'نشط', 'جاري'] else "🔴"
+        
+        return f"""<b>🆕 مشترك جديد</b>
+━━━━━━━━━━━━━━━━━
+
+🆔 <b>رمز الاشتراك:</b> {e(sub_id)}
+👤 <b>المشترك:</b> {e(customer)}
+📦 <b>الخدمة:</b> {e(service)}
+📅 <b>صالح حتى:</b> {expiry}
+📍 <b>المنطقة:</b> {e(zone)}
+{status_emoji} <b>الحالة:</b> {status}
+
+📢 <b>تمت إضافته للمراقبة</b>
+
+🔗 <a href="https://admin.ftth.iq/subscriptions">فتح الاشتراكات</a>
+━━━━━━━━━━━━━━━━━"""
+
+
+class WhatsApp:
+    """WhatsApp Business API integration"""
+    def __init__(self):
+        self.phone_id = WHATSAPP_PHONE_ID
+        self.token = WHATSAPP_TOKEN
+        self.recipient = WHATSAPP_RECIPIENT
+        self.enabled = bool(self.phone_id and self.token and self.recipient)
+        if self.enabled:
+            logger.info("📱 WhatsApp notifications enabled")
+    
+    async def send(self, text: str) -> bool:
+        """Send a text message via WhatsApp Business API"""
+        if not self.enabled:
+            return True
+        
+        import aiohttp
+        try:
+            # First, we need to use a template message since we're outside the 24h window
+            # Using hello_world template for now - you can create custom template later
+            url = f"https://graph.facebook.com/v22.0/{self.phone_id}/messages"
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            }
+            
+            # Send text message (only works within 24h customer service window)
+            # For notifications outside window, we use template
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": self.recipient,
+                "type": "template",
+                "template": {
+                    "name": "hello_world",
+                    "language": {"code": "en_US"}
+                }
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    if response.status == 200:
+                        logger.info("📱 WhatsApp notification sent!")
+                        return True
+                    else:
+                        error = await response.text()
+                        logger.warning(f"⚠️ WhatsApp error: {response.status} - {error}")
+                        return False
+        except Exception as e:
+            logger.warning(f"⚠️ WhatsApp send error: {e}")
+            return False
+    
+    async def send_ticket(self, ticket: Dict) -> bool:
+        """Send ticket notification - uses template message"""
+        if not self.enabled:
+            return True
+        
+        # For now, just send hello_world template
+        # TODO: Create custom template for ticket notifications
+        return await self.send("")
+    
+    def format(self, t: Dict) -> str:
+        """Format ticket for WhatsApp (plain text, no HTML)"""
+        st = t.get('status', 'N/A')
+        em = {'Open':'🔴','In Progress':'🟡','In progress':'🟡','Resolved':'🟢','Closed':'⚫'}.get(st,'⚪')
+        return f"""🔔 *تنبيه SLA جديد*
+━━━━━━━━━━━━━━━━━
+
+🎫 *رقم التذكرة:* {t.get('displayId', 'N/A')}
+🕐 *التاريخ:* {t.get('createdAt', '')[:19].replace('T', ' ')}
+
+🆔 *معرف الوكيل:* {t.get('partner', {}).get('id', '')}
+👤 *اسم الوكيل:* {t.get('partner', {}).get('displayValue', '')}
+
+👥 *المشترك:* {t.get('customer', {}).get('displayValue', '')}
+📋 *نوع الطلب:* {t.get('self', {}).get('displayValue', '')}
+📝 *الوصف:* {t.get('summary', '')[:300]}
+📍 *المنطقة:* {t.get('zone', {}).get('displayValue', '')}
+{em} *الحالة:* {st}
+
+🔗 https://admin.ftth.iq/tickets/details/{t.get('self', {}).get('id', '')}
+━━━━━━━━━━━━━━━━━"""
 
 
 class Monitor:
     def __init__(self):
         self.state = TicketState()
+        self.subscription_state = SubscriptionState()
         self.telegram = Telegram()
+        self.whatsapp = WhatsApp()
         self.browser = None
         self.ctx = None
         self.page = None
@@ -377,8 +635,8 @@ class Monitor:
                     logger.info("✅ Retry successful after token refresh!")
                     return result
             
-            # If refresh failed, send telegram notification
-            await self.telegram.send("""⚠️ <b>تنبيه: الجلسة انتهت!</b>
+            # If refresh failed, send notification to DEVELOPER only (not client)
+            await self.telegram.send_to_dev("""⚠️ <b>تنبيه: الجلسة انتهت!</b>
 ━━━━━━━━━━━━━━━━━
 ❌ النظام لم يستطع تجديد التوكن تلقائياً.
 الـ Refresh Token ربما انتهى (8 أيام).
@@ -390,6 +648,43 @@ class Monitor:
             return None
         
         return result
+    
+    async def _fetch_subscriptions_api(self) -> Optional[Dict]:
+        """Fetch subscriptions from API"""
+        try:
+            result = await self.page.evaluate(f"""
+                (async()=>{{
+                    try{{
+                        let token = localStorage.getItem('access_token');
+                        if (!token) return {{error:'no_token'}};
+                        
+                        let r = await fetch('{SUBSCRIPTIONS_API_URL}?pageSize=100&pageNumber=1',{{
+                            headers:{{'Authorization':'Bearer '+token,'Accept':'application/json'}}
+                        }});
+                        
+                        if (r.status === 401) {{
+                            await new Promise(x=>setTimeout(x,2000));
+                            token = localStorage.getItem('access_token');
+                            r = await fetch('{SUBSCRIPTIONS_API_URL}?pageSize=100&pageNumber=1',{{
+                                headers:{{'Authorization':'Bearer '+token,'Accept':'application/json'}}
+                            }});
+                        }}
+                        
+                        return r.ok ? await r.json() : {{error:r.status}};
+                    }}catch(e){{return {{error:e.message}};}}
+                }})()
+            """)
+            
+            if 'error' in result:
+                logger.error(f"❌ Subscriptions API: {result['error']}")
+                return None
+            
+            logger.info(f"✅ Got {len(result.get('items',[]))} subscriptions")
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Subscriptions fetch error: {e}")
+            return None
     
     async def run(self):
         logger.info("=" * 50)
@@ -415,7 +710,7 @@ class Monitor:
                     if t.get('displayId'):
                         self.state.add(t['displayId'])
                 self.state.save()
-                await self.telegram.send(f"""🚀 <b>FTTH Monitor Started</b>
+                await self.telegram.send_to_dev(f"""🚀 <b>FTTH Monitor Started</b>
 ━━━━━━━━━━━━━━━━━
 
 ✅ النظام يعمل
@@ -447,7 +742,9 @@ class Monitor:
                     except Exception as e:
                         logger.warning(f"⚠️ Could not parse ticket date: {e}")
                     
-                    await self.telegram.send(self.telegram.format(t))
+                    # Send notifications to BOTH client AND developer
+                    await self.telegram.send_to_all(self.telegram.format(t))
+                    await self.whatsapp.send_ticket(t)
                     sent_count += 1
                     await asyncio.sleep(random.uniform(1, 3))
                 
@@ -456,6 +753,82 @@ class Monitor:
                 logger.info("✅ No new tickets")
             
             self.state.save()
+            
+            # ═══════════════════════════════════════════════════
+            # 📦 SUBSCRIPTION MONITORING
+            # ═══════════════════════════════════════════════════
+            logger.info("=" * 50)
+            logger.info("📦 Checking Subscriptions...")
+            
+            sub_result = await self._fetch_subscriptions_api()
+            if sub_result:
+                subscriptions = sub_result.get('items', [])
+                
+                # First run: save all subscription statuses
+                if len(self.subscription_state.subscriptions) == 0:
+                    logger.info("🎯 First run - saving subscription states")
+                    for sub in subscriptions:
+                        sub_id = sub.get('id') or sub.get('subscriptionId', '')
+                        status = sub.get('status', '').lower()
+                        if status in ['active', 'نشط', 'جاري']:
+                            status = 'active'
+                        elif status in ['expired', 'منتهي', 'منتهية']:
+                            status = 'expired'
+                        if sub_id:
+                            self.subscription_state.subscriptions[sub_id] = status
+                    self.subscription_state.save()
+                    logger.info(f"📋 Saved {len(self.subscription_state.subscriptions)} subscriptions")
+                else:
+                    # Check for changes
+                    expired, renewed, new_subs = self.subscription_state.get_changes(subscriptions)
+                    
+                    # Send notifications for expired subscriptions
+                    for sub in expired:
+                        logger.info(f"🔴 Expired: {sub.get('id', 'N/A')}")
+                        await self.telegram.send_to_all(self.telegram.format_expired(sub))
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                    
+                    # Send notifications for renewed subscriptions
+                    for sub in renewed:
+                        logger.info(f"🟢 Renewed: {sub.get('id', 'N/A')}")
+                        await self.telegram.send_to_all(self.telegram.format_renewed(sub))
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                    
+                    # Send notifications for new subscribers
+                    for sub in new_subs:
+                        logger.info(f"🆕 New subscriber: {sub.get('id', 'N/A')}")
+                        await self.telegram.send_to_all(self.telegram.format_new_subscriber(sub))
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                    
+                    # Log summary
+                    if expired or renewed or new_subs:
+                        logger.info(f"📊 Changes: {len(expired)} expired, {len(renewed)} renewed, {len(new_subs)} new")
+                    else:
+                        logger.info("✅ No subscription changes")
+                    
+                    self.subscription_state.save()
+            
+            # 📊 Send Run Summary to DEVELOPER only (every run)
+            sub_count = len(self.subscription_state.subscriptions) if hasattr(self, 'subscription_state') else 0
+            new_tickets = len(new) if 'new' in dir() else 0
+            expired_count = len(expired) if 'expired' in dir() else 0
+            renewed_count = len(renewed) if 'renewed' in dir() else 0
+            new_subs_count = len(new_subs) if 'new_subs' in dir() else 0
+            
+            await self.telegram.send_to_dev(f"""📊 <b>FTTH Monitor Run Summary</b>
+━━━━━━━━━━━━━━━━━
+
+🎫 <b>التذاكر:</b> {len(self.state.known)} معروفة
+🆕 <b>تذاكر جديدة:</b> {new_tickets}
+
+📦 <b>الاشتراكات:</b> {sub_count} مراقَبة
+🔴 <b>منتهية:</b> {expired_count}
+🟢 <b>تجديد:</b> {renewed_count}
+🆕 <b>جدد:</b> {new_subs_count}
+
+✅ <b>الحالة:</b> Run completed successfully
+━━━━━━━━━━━━━━━━━""")
+            
             return True
             
         finally:
