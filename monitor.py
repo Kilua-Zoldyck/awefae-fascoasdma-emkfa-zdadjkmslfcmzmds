@@ -363,25 +363,46 @@ class Telegram:
 🔗 <a href="https://admin.ftth.iq/tickets/details/{t.get('self', {}).get('id', '')}">فتح التذكرة</a>
 ━━━━━━━━━━━━━━━━━"""
     
+    def _extract_common_data(self, sub: Dict) -> Dict:
+        """Helper to extract common subscription fields with fallbacks"""
+        data = {}
+        data['sub_id'] = sub.get('self', {}).get('id') or sub.get('id', 'N/A')
+        data['customer'] = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
+        
+        # Service Plan Fallbacks
+        data['service'] = (
+            sub.get('servicePlan', {}).get('displayValue') or 
+            sub.get('serviceName') or 
+            sub.get('planName') or 
+            sub.get('product', {}).get('displayValue') or
+            'N/A'
+        )
+        
+        # Expiry Date Fallbacks
+        expiry_raw = (
+            sub.get('expiryDate') or 
+            sub.get('expirationDate') or 
+            sub.get('endDate') or 
+            sub.get('validUntil')
+        )
+        data['expiry'] = expiry_raw[:10] if expiry_raw else 'N/A'
+        
+        data['zone'] = sub.get('zone', {}).get('displayValue') or sub.get('zoneName', 'N/A')
+        return data
+
     def format_expired(self, sub: Dict) -> str:
         """Format expired subscription notification"""
         def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
-        
-        # Extract subscription data
-        sub_id = sub.get('self', {}).get('id') or sub.get('id', 'N/A')
-        customer = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
-        service = sub.get('servicePlan', {}).get('displayValue', '') or sub.get('serviceName', 'N/A')
-        expiry = sub.get('expiryDate', '')[:10] if sub.get('expiryDate') else 'N/A'
-        zone = sub.get('zone', {}).get('displayValue', '') or sub.get('zoneName', 'N/A')
+        d = self._extract_common_data(sub)
         
         return f"""<b>🔴 اشتراك منتهي</b>
 ━━━━━━━━━━━━━━━━━
 
-🆔 <b>رمز الاشتراك:</b> {e(sub_id)}
-👤 <b>المشترك:</b> {e(customer)}
-📦 <b>الخدمة:</b> {e(service)}
-📅 <b>تاريخ الانتهاء:</b> {expiry}
-📍 <b>المنطقة:</b> {e(zone)}
+🆔 <b>رمز الاشتراك:</b> {e(d['sub_id'])}
+👤 <b>المشترك:</b> {e(d['customer'])}
+📦 <b>الخدمة:</b> {e(d['service'])}
+📅 <b>تاريخ الانتهاء:</b> {d['expiry']}
+📍 <b>المنطقة:</b> {e(d['zone'])}
 
 ⚠️ <b>الحالة:</b> منتهي الصلاحية
 
@@ -391,22 +412,16 @@ class Telegram:
     def format_renewed(self, sub: Dict) -> str:
         """Format renewed subscription notification"""
         def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
-        
-        # Extract subscription data
-        sub_id = sub.get('self', {}).get('id') or sub.get('id', 'N/A')
-        customer = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
-        service = sub.get('servicePlan', {}).get('displayValue', '') or sub.get('serviceName', 'N/A')
-        expiry = sub.get('expiryDate', '')[:10] if sub.get('expiryDate') else 'N/A'
-        zone = sub.get('zone', {}).get('displayValue', '') or sub.get('zoneName', 'N/A')
+        d = self._extract_common_data(sub)
         
         return f"""<b>🟢 تم التجديد</b>
 ━━━━━━━━━━━━━━━━━
 
-🆔 <b>رمز الاشتراك:</b> {e(sub_id)}
-👤 <b>المشترك:</b> {e(customer)}
-📦 <b>الخدمة:</b> {e(service)}
-📅 <b>صالح حتى:</b> {expiry}
-📍 <b>المنطقة:</b> {e(zone)}
+🆔 <b>رمز الاشتراك:</b> {e(d['sub_id'])}
+👤 <b>المشترك:</b> {e(d['customer'])}
+📦 <b>الخدمة:</b> {e(d['service'])}
+📅 <b>صالح حتى:</b> {d['expiry']}
+📍 <b>المنطقة:</b> {e(d['zone'])}
 
 ✅ <b>الحالة:</b> تم التجديد بنجاح
 
@@ -416,24 +431,18 @@ class Telegram:
     def format_new_subscriber(self, sub: Dict) -> str:
         """Format new subscriber notification"""
         def e(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
-        
-        # Extract subscription data
-        sub_id = sub.get('self', {}).get('id') or sub.get('id', 'N/A')
-        customer = sub.get('customer', {}).get('displayValue', '') or sub.get('customerName', 'N/A')
-        service = sub.get('servicePlan', {}).get('displayValue', '') or sub.get('serviceName', 'N/A')
-        expiry = sub.get('expiryDate', '')[:10] if sub.get('expiryDate') else 'N/A'
-        zone = sub.get('zone', {}).get('displayValue', '') or sub.get('zoneName', 'N/A')
+        d = self._extract_common_data(sub)
         status = sub.get('status', 'N/A')
         status_emoji = "🟢" if status.lower() in ['active', 'نشط', 'جاري'] else "🔴"
         
         return f"""<b>🆕 مشترك جديد</b>
 ━━━━━━━━━━━━━━━━━
 
-🆔 <b>رمز الاشتراك:</b> {e(sub_id)}
-👤 <b>المشترك:</b> {e(customer)}
-📦 <b>الخدمة:</b> {e(service)}
-📅 <b>صالح حتى:</b> {expiry}
-📍 <b>المنطقة:</b> {e(zone)}
+🆔 <b>رمز الاشتراك:</b> {e(d['sub_id'])}
+👤 <b>المشترك:</b> {e(d['customer'])}
+📦 <b>الخدمة:</b> {e(d['service'])}
+📅 <b>صالح حتى:</b> {d['expiry']}
+📍 <b>المنطقة:</b> {e(d['zone'])}
 {status_emoji} <b>الحالة:</b> {status}
 
 📢 <b>تمت إضافته للمراقبة</b>
@@ -844,6 +853,12 @@ class Monitor:
                     # Check for changes
                     expired, renewed, new_subs = self.subscription_state.get_changes(subscriptions)
                     
+                    # 🔍 DEBUG: Log data structure if we have N/A fields
+                    if expired or renewed or new_subs:
+                        changes = expired + renewed + new_subs
+                        if changes:
+                            logger.info(f"🔍 DEBUG DATA FOR FIRST CHANGE: {json.dumps(changes[0], ensure_ascii=False)}")
+
                     # Send notifications for expired subscriptions
                     for sub in expired:
                         logger.info(f"🔴 Expired: {sub.get('id', 'N/A')}")
