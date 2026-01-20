@@ -480,16 +480,13 @@ class WhatsApp:
                 "Content-Type": "application/json"
             }
             
-            # Send text message (only works within 24h customer service window)
-            # For notifications outside window, we use template
+            # Send text message (Requires active 24h conversation window for simple text)
+            # User must message the bot first!
             payload = {
                 "messaging_product": "whatsapp",
                 "to": self.recipient,
-                "type": "template",
-                "template": {
-                    "name": "hello_world",
-                    "language": {"code": "en_US"}
-                }
+                "type": "text",
+                "text": {"body": text}
             }
             
             async with aiohttp.ClientSession() as session:
@@ -510,9 +507,9 @@ class WhatsApp:
         if not self.enabled:
             return True
         
-        # For now, just send hello_world template
-        # TODO: Create custom template for ticket notifications
-        return await self.send("")
+        # Send full text details (User must maintain 24h window)
+        text = self.format(ticket)
+        return await self.send(text)
     
     def format(self, t: Dict) -> str:
         """Format ticket for WhatsApp (plain text, no HTML)"""
