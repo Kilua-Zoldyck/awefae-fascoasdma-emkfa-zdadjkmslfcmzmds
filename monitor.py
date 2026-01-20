@@ -984,6 +984,11 @@ class Monitor:
             renewed_count = len(renewed) if 'renewed' in locals() else 0
             new_subs_count = len(new_subs) if 'new_subs' in locals() else 0
 
+            # 📊 Detailed Run Log (For Developer ONLY)
+            if self.report_buffer:
+                log_text = "📊 <b>تقرير التشغيل (Run Log)</b>\n━━━━━━━━━━━━━━━━━\n" + "\n".join(self.report_buffer)
+                await self.telegram.send_to_dev(log_text)
+
             await self.telegram.send_to_dev(f"""📊 <b>FTTH Monitor Run Summary</b>
 ━━━━━━━━━━━━━━━━━
 
