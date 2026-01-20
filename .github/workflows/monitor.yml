@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '*/10 * * * *'
   
+  # Trigger from Airflow
+  repository_dispatch:
+    types: [trigger-monitor]
+  
   workflow_dispatch:
 
 env:

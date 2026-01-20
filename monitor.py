@@ -215,9 +215,17 @@ class TicketState:
         KNOWN_TICKETS_FILE.write_text(json.dumps({
             'tickets': list(self.known),
             'updated': datetime.now().isoformat(),
+            'last_run': datetime.now().timestamp(),
             'count': len(self.known)
         }, indent=2))
         logger.info(f"💾 Saved {len(self.known)} tickets")
+    
+    def get_last_run(self) -> float:
+        try:
+            data = json.loads(KNOWN_TICKETS_FILE.read_text())
+            return data.get('last_run', 0)
+        except:
+            return 0
     
     def is_new(self, tid: str) -> bool:
         return tid not in self.known
@@ -731,6 +739,17 @@ class Monitor:
         logger.info("=" * 50)
         
         startup_delay()
+        
+        # 🛡️ Safety: Prevent frequent runs (Dual Scheduler Protection)
+        last_run = self.state.get_last_run()
+        if last_run > 0:
+            elapsed = datetime.now().timestamp() - last_run
+            if elapsed < 300:  # Less than 5 minutes
+                logger.warning(f"🛑 Skipping run: Last run was {elapsed:.0f}s ago (< 300s)")
+                self.log_report("🛑 Skipped: Too frequent (Rate Limit)")
+                # Send brief report to dev so they know it worked but skipped
+                # await self.telegram.send_to_dev(f"⚠️ <b>Skipped Run</b>\nReason: Recently ran ({elapsed:.0f}s ago)")
+                return True
         
         if not await self.setup():
             return False
