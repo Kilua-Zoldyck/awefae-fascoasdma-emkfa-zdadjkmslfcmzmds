@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     
+    # Grant Write Access for Git Push
+    permissions:
+      contents: write
+    
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4

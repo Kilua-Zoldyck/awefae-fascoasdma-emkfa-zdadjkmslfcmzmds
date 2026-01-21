@@ -45,8 +45,13 @@ def sync_to_github():
         subprocess.run(["git", "config", "user.email", "bot@wakeel.local"], check=False)
         
         # 2. Add, Commit, Push
+        # 2. Add, Commit, Pull, Push
         subprocess.run(["git", "add", "settings.json"], check=True)
         subprocess.run(["git", "commit", "settings.json", "-m", "config: update notification settings via bot"], check=True)
+        
+        # Pull changes to avoid conflict (Rebase strategy)
+        subprocess.run(["git", "pull", "--rebase"], check=True)
+        
         subprocess.run(["git", "push"], check=True)
         logger.info("✅ Settings synced to GitHub successfully")
         return True
