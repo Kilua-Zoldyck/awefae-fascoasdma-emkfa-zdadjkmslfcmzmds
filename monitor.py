@@ -29,6 +29,7 @@ load_dotenv()
 # Config
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')      # العميل - إشعارات التذاكر والاشتراكات
+GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID', '')        # جروب الموظفين - نفس إشعارات العميل
 DEV_CHAT_ID = os.getenv('DEV_CHAT_ID', '')              # المطور - إشعارات النظام والأخطاء
 SESSION_FILE = Path('browser_state.json')
 KNOWN_TICKETS_FILE = Path('known_tickets.json')
@@ -301,21 +302,29 @@ class Telegram:
     def __init__(self):
         self.token = TELEGRAM_TOKEN
         self.chat_id = TELEGRAM_CHAT_ID
+        self.group_chat_id = GROUP_CHAT_ID
         self.dev_chat_id = DEV_CHAT_ID
         self.enabled = bool(self.token and self.chat_id)
         self.dev_enabled = bool(self.token and self.dev_chat_id)
     
     async def send(self, text: str) -> bool:
-        """Send notification to CLIENT (tickets, subscriptions)"""
+        """Send notification to CLIENT and GROUP (tickets, subscriptions)"""
         if not self.enabled:
             return True
         import aiohttp
         try:
             async with aiohttp.ClientSession() as s:
-                async with s.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
+                # Send to Client (Admin)
+                await s.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
                     json={'chat_id': self.chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True}
-                ) as r:
-                    return r.status == 200
+                )
+                
+                # Send to Group (Employees) - if configured
+                if self.group_chat_id:
+                     await s.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
+                        json={'chat_id': self.group_chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True}
+                    )
+                return True
         except:
             return False
     
