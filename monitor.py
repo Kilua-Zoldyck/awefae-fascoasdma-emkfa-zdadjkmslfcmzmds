@@ -311,16 +311,39 @@ class Telegram:
         """Send notification to CLIENT and GROUP (tickets, subscriptions)"""
         if not self.enabled:
             return True
+        
+        # Load Settings safely
+        settings = {}
+        try:
+            if Path('settings.json').exists():
+                settings = json.loads(Path('settings.json').read_text())
+        except:
+            pass
+            
+        # Determine Notification Type based on text content (Simple Heuristic)
+        notify_group = False
+        if "تنبيه SLA جديد" in text:
+            notify_group = settings.get("notify_tickets", True)
+        elif "اشتراك منتهي" in text:
+            notify_group = settings.get("notify_expired", True)
+        elif "تم التجديد" in text:
+            notify_group = settings.get("notify_renewed", True)
+        elif "مشترك جديد" in text:
+            notify_group = settings.get("notify_new_sub", True)
+        else:
+            # Default for unknown types (or fallback)
+            notify_group = True
+
         import aiohttp
         try:
             async with aiohttp.ClientSession() as s:
-                # Send to Client (Admin)
+                # 1. Send to Client (Admin) - ALWAYS (Per User Request)
                 await s.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
                     json={'chat_id': self.chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True}
                 )
                 
-                # Send to Group (Employees) - if configured
-                if self.group_chat_id:
+                # 2. Send to Group (Employees) - ONLY IF ENABLED in settings
+                if self.group_chat_id and notify_group:
                      await s.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
                         json={'chat_id': self.group_chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True}
                     )
