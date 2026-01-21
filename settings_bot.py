@@ -186,8 +186,13 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
          synced = True 
 
     # 4. Final Status Update
-    from datetime import datetime
-    time_str = datetime.now().strftime("%I:%M %p")
+    # 4. Final Status Update
+    from datetime import datetime, timedelta
+    
+    # Adjust for Iraq Time (UTC+3)
+    # GitHub Actions/Servers usually run in UTC.
+    iraq_time = datetime.utcnow() + timedelta(hours=3)
+    time_str = iraq_time.strftime("%I:%M %p")
     
     status_msg = "✅ **تمت المزامنة بنجاح**" if synced else "⚠️ **فشل الرفع (محفوظ محلياً)**"
     if data == "refresh":
