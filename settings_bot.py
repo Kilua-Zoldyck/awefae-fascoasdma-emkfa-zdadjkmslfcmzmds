@@ -108,20 +108,21 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     chat = query.message.chat
     
-    # 0. Always Allow Owner (You)
-    # 0. Always Allow Owner (You)
+    # 0. Privileged Users (Owner & Dev)
     admin_id = os.getenv('ADMIN_CHAT_ID')
+    dev_id = os.getenv('DEV_CHAT_ID')
     
-    # Normalize and Debug
+    # Normalize IDs
     u_id = str(user.id).strip()
-    a_id = str(admin_id).strip() if admin_id else "None"
+    allow_list = [str(x).strip() for x in [admin_id, dev_id] if x]
     
-    print(f"DEBUG: User={u_id}, Admin={a_id}") # Visible in logs
+    print(f"DEBUG: User={u_id}, Allowed={allow_list}")
     
-    if u_id == a_id:
+    # 1. Pass if User is Privileged
+    if u_id in allow_list:
         pass
     
-    # 1. Else, check Group Admin status
+    # 2. If Group/Supergroup, allow Admin
     elif chat.type in ['group', 'supergroup']:
         try:
             member = await context.bot.get_chat_member(chat.id, user.id)
@@ -129,8 +130,13 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer(f"⛔ عذراً، هذا الزر للمسؤولين فقط! (ID: {user.id})", show_alert=True)
                 return
         except:
-            await query.answer(f"⚠️ لا يمكن التحقق من الصلاحيات (ID: {user.id})", show_alert=True)
-            return
+             await query.answer(f"⚠️ لا يمكن التحقق من الصلاحيات (ID: {user.id})", show_alert=True)
+             return
+             
+    # 3. Block unauthorized private chats
+    else:
+        await query.answer(f"⛔ عذراً، هذا البوت خاص! (ID: {user.id})", show_alert=True)
+        return
 
     # Proceed
     data = query.data
@@ -202,6 +208,12 @@ if __name__ == '__main__':
     if not TOKEN:
         print("❌ Error: TELEGRAM_TOKEN not found")
         exit(1)
+        
+    if not os.getenv('ADMIN_CHAT_ID'):
+        print("⚠️ Warning: ADMIN_CHAT_ID not set. Bot owner recognition might trigger false negatives.")
+        
+    if not os.getenv('DEV_CHAT_ID'):
+        print("⚠️ Warning: DEV_CHAT_ID not set.")
         
     application = ApplicationBuilder().token(TOKEN).build()
     
