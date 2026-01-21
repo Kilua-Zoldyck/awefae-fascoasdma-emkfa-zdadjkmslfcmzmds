@@ -1,28 +1,14 @@
-# Environment
-.env
-venv/
-__pycache__/
+# Ignore EVERYTHING (files and directories)
+*
 
-# State files (kept as artifacts)
-known_tickets.json
-known_subscriptions.json
-browser_state.json
-session.json
+# Whitelist .github folder and its contents
+!.github/
+!.github/**
 
-# Logs
-*.log
-
-# IDE
-.vscode/
-.idea/
-
-# Dev files
-json
-login_failed.png
-simulate_new_ticket.py
-test_local.fish
-browser_state.json
-session.json
-known_tickets.json
-README.md
-Text File (6).txt
+# Whitelist specific files in root
+!.gitignore
+!extract_session.py
+!monitor.py
+!requirements.txt
+!settings.json
+!settings_bot.py

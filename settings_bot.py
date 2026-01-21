@@ -11,6 +11,8 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+import subprocess
+
 # Load Environment
 load_dotenv()
 TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -37,6 +39,23 @@ def load_settings():
 
 def save_settings(data):
     SETTINGS_FILE.write_text(json.dumps(data, indent=2))
+    # Sync to GitHub immediately
+    sync_to_github()
+
+def sync_to_github():
+    """Pushes the updated settings.json to GitHub so Actions can see it"""
+    try:
+        # 1. Config User (if not set)
+        subprocess.run(["git", "config", "user.name", "Settings Bot"], check=False)
+        subprocess.run(["git", "config", "user.email", "bot@wakeel.local"], check=False)
+        
+        # 2. Add, Commit, Push
+        subprocess.run(["git", "add", "settings.json"], check=True)
+        subprocess.run(["git", "commit", "settings.json", "-m", "config: update notification settings via bot"], check=True)
+        subprocess.run(["git", "push"], check=True)
+        logger.info("✅ Settings synced to GitHub successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to sync to GitHub: {e}")
 
 def build_keyboard(settings):
     keyboard = []
