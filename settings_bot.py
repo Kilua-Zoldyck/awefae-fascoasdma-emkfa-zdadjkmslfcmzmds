@@ -37,11 +37,6 @@ def load_settings():
             pass
     return {k: True for k in SETTINGS_MAP.keys()}
 
-def save_settings(data):
-    SETTINGS_FILE.write_text(json.dumps(data, indent=2))
-    # Sync to GitHub immediately
-    sync_to_github()
-
 def sync_to_github():
     """Pushes the updated settings.json to GitHub so Actions can see it"""
     try:
@@ -54,8 +49,10 @@ def sync_to_github():
         subprocess.run(["git", "commit", "settings.json", "-m", "config: update notification settings via bot"], check=True)
         subprocess.run(["git", "push"], check=True)
         logger.info("✅ Settings synced to GitHub successfully")
+        return True
     except Exception as e:
         logger.error(f"❌ Failed to sync to GitHub: {e}")
+        return False
 
 def build_keyboard(settings):
     keyboard = []
@@ -114,7 +111,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 0. Always Allow Owner (You)
     admin_id = os.getenv('ADMIN_CHAT_ID')
     if str(user.id) == str(admin_id):
-        # Allow immediately
         pass
     
     # 1. Else, check Group Admin status
@@ -125,7 +121,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("⛔ عذراً، هذا الزر للمسؤولين فقط!", show_alert=True)
                 return
         except:
-            # If check fails, default to blocking to be safe
             await query.answer("⚠️ لا يمكن التحقق من الصلاحيات", show_alert=True)
             return
 
@@ -136,23 +131,59 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("هذا مجرد عنوان 🏷️")
         return
         
-    await query.answer() # Ack
+    # 1. ACK immediately with Toast (Stops hanging)
+    await query.answer("✅ جاري التطبيق والمزامنة...", show_alert=False)
     
     settings = load_settings()
-    
+
     if data == "refresh":
         pass 
     elif data.startswith("toggle:"):
         key = data.split(":")[1]
         if key in SETTINGS_MAP:
             settings[key] = not settings.get(key, True)
-            save_settings(settings)
+            # Save locally
+            SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
     
-    # Update message in place
+    # 2. Show "Syncing" State on Message
     try:
         await query.edit_message_text(
-            text="👋 **مرحباً بك في لوحة التحكم**\n"
-                 "إليك الإعدادات الحالية (اضغط للتغيير):",
+            text="⏳ **جاري الاتصال بالسيرفر...**\nرجاء الانتظار لحظات لتأكيد المزامنة.",
+            reply_markup=build_keyboard(settings),
+            parse_mode='Markdown'
+        )
+    except:
+        pass
+
+    # 3. Perform Sync (Blocking but acknowledged)
+    # Only sync if we toggled something to check
+    synced = False
+    if data.startswith("toggle:"):
+         synced = sync_to_github()
+    else:
+         # Refresh assumes synced if file is consistent? No, just checking status.
+         # For simplicity, if refresh, we don't sync unless dirty.
+         # But user might want to refresh UI from file.
+         synced = True 
+
+    # 4. Final Status Update
+    from datetime import datetime
+    time_str = datetime.now().strftime("%I:%M %p")
+    
+    status_msg = "✅ **تمت المزامنة بنجاح**" if synced else "⚠️ **فشل الرفع (محفوظ محلياً)**"
+    if data == "refresh":
+        status_msg = "✅ **تم تحديث الحالة**"
+
+    final_text = (
+        "👋 **لوحة التحكم**\n"
+        f"آخر تحديث: {time_str}\n"
+        f"الحالة: {status_msg}\n\n"
+        "إليك الإعدادات الحالية:"
+    )
+    
+    try:
+        await query.edit_message_text(
+            text=final_text,
             reply_markup=build_keyboard(settings),
             parse_mode='Markdown'
         )
