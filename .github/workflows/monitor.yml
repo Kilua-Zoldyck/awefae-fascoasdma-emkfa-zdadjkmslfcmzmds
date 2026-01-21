@@ -35,7 +35,7 @@ jobs:
 
       - name: 📦 Dependencies
         run: |
-          pip install -q python-dotenv playwright aiohttp
+          pip install -q python-dotenv playwright aiohttp python-telegram-bot
           playwright install chromium
           playwright install-deps chromium
 
@@ -60,7 +60,7 @@ jobs:
           path: .
           if_no_artifact_found: warn
 
-      - name: 🔍 Run monitor
+      - name: 🔍 Run monitor & Bot
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -72,7 +72,12 @@ jobs:
           WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
           WHATSAPP_PHONE_ID: ${{ secrets.WHATSAPP_PHONE_ID }}
           WHATSAPP_RECIPIENT: ${{ secrets.WHATSAPP_RECIPIENT }}
-        run: python monitor.py
+        run: |
+          # Start Settings Bot in Background (Interactive Control)
+          nohup python settings_bot.py > bot.log 2>&1 &
+          
+          # Run Main Monitor
+          python monitor.py
 
       - name: 💾 Save state
         uses: actions/upload-artifact@v4
