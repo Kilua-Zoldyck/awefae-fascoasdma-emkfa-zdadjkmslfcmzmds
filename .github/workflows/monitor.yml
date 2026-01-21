@@ -64,6 +64,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+          GROUP_CHAT_ID: ${{ secrets.GROUP_CHAT_ID }}
           DEV_CHAT_ID: ${{ secrets.DEV_CHAT_ID }}
           FTTH_USERNAME: ${{ secrets.FTTH_USERNAME }}
           FTTH_PASSWORD: ${{ secrets.FTTH_PASSWORD }}
