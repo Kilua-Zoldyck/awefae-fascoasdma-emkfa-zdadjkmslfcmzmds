@@ -109,8 +109,16 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = query.message.chat
     
     # 0. Always Allow Owner (You)
+    # 0. Always Allow Owner (You)
     admin_id = os.getenv('ADMIN_CHAT_ID')
-    if str(user.id) == str(admin_id):
+    
+    # Normalize and Debug
+    u_id = str(user.id).strip()
+    a_id = str(admin_id).strip() if admin_id else "None"
+    
+    print(f"DEBUG: User={u_id}, Admin={a_id}") # Visible in logs
+    
+    if u_id == a_id:
         pass
     
     # 1. Else, check Group Admin status
