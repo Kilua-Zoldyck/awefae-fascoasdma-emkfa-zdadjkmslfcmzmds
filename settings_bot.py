@@ -126,10 +126,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             member = await context.bot.get_chat_member(chat.id, user.id)
             if member.status not in ['creator', 'administrator']:
-                await query.answer("⛔ عذراً، هذا الزر للمسؤولين فقط!", show_alert=True)
+                await query.answer(f"⛔ عذراً، هذا الزر للمسؤولين فقط! (ID: {user.id})", show_alert=True)
                 return
         except:
-            await query.answer("⚠️ لا يمكن التحقق من الصلاحيات", show_alert=True)
+            await query.answer(f"⚠️ لا يمكن التحقق من الصلاحيات (ID: {user.id})", show_alert=True)
             return
 
     # Proceed
