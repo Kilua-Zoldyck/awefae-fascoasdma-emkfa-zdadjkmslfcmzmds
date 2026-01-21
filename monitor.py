@@ -340,7 +340,7 @@ class Telegram:
             # Final fallback
             if Path('settings.json').exists():
                  try: settings = json.loads(Path('settings.json').read_text())
-                 except: pass    pass
+                 except: pass
             
         # Determine Notification Type based on text content (Simple Heuristic)
         notify_group = False
