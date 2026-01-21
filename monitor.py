@@ -312,13 +312,35 @@ class Telegram:
         if not self.enabled:
             return True
         
-        # Load Settings safely
+            # Load Settings (Try Remote GitHub First for Real-Time Control)
         settings = {}
         try:
-            if Path('settings.json').exists():
+            # 1. Try Cloud Fetch (Instant)
+            gh_token = os.getenv('GITHUB_TOKEN')
+            # Use raw.githubusercontent.com for speed. Private repos need token header? No, raw needs token in header.
+            # actually API is more reliable for private repos with token.
+            # Repo: Kilua-Zoldyck/awefae-fascoasdma-emkfa-zdadjkmslfcmzmds
+            
+            if gh_token:
+               api_url = "https://raw.githubusercontent.com/Kilua-Zoldyck/awefae-fascoasdma-emkfa-zdadjkmslfcmzmds/main/settings.json"
+               headers = {"Authorization": f"token {gh_token}"}
+               async with aiohttp.ClientSession() as fetch_session:
+                   async with fetch_session.get(api_url, headers=headers, timeout=5) as resp:
+                       if resp.status == 200:
+                           content = await resp.text()
+                           settings = json.loads(content)
+                           # logging.info("☁️ Cloud Settings Loaded")
+            
+            # 2. Fallback to Local if Cloud fails or empty
+            if not settings and Path('settings.json').exists():
                 settings = json.loads(Path('settings.json').read_text())
-        except:
-            pass
+                
+        except Exception as e:
+            # logging.error(f"Settings Load Error: {e}")
+            # Final fallback
+            if Path('settings.json').exists():
+                 try: settings = json.loads(Path('settings.json').read_text())
+                 except: pass    pass
             
         # Determine Notification Type based on text content (Simple Heuristic)
         notify_group = False
