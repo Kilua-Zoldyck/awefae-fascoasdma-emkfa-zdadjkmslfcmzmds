@@ -50,6 +50,111 @@ FTTH_PASSWORD = os.getenv('FTTH_PASSWORD', '')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Settings file for notification controls
+SETTINGS_FILE = Path('settings.json')
+SETTINGS_MAP = {
+    "notify_tickets": "تذاكر جديدة",
+    "notify_expired": "اشتراكات منتهية",
+    "notify_renewed": "تجديد اشتراكات",
+    "notify_new_sub": "مشتركين جدد",
+}
+
+def load_settings_local():
+    """Load settings from local file"""
+    if SETTINGS_FILE.exists():
+        try:
+            return json.loads(SETTINGS_FILE.read_text())
+        except:
+            pass
+    return {k: True for k in SETTINGS_MAP.keys()}
+
+def save_settings_local(settings):
+    """Save settings to local file"""
+    SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
+
+async def process_pending_button_clicks():
+    """
+    معالجة ضغطات الأزرار المعلقة قبل بدء المراقبة
+    Process any pending button clicks before starting monitoring
+    """
+    import aiohttp
+    
+    if not TELEGRAM_TOKEN:
+        return
+    
+    logger.info("🔘 Checking for pending button clicks...")
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Get pending updates
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+            async with session.get(url, timeout=10) as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json()
+            
+            if not data.get('ok'):
+                return
+            
+            updates = data.get('result', [])
+            processed_count = 0
+            settings = load_settings_local()
+            last_update_id = None
+            
+            for update in updates:
+                last_update_id = update.get('update_id')
+                callback = update.get('callback_query')
+                
+                if not callback:
+                    continue
+                
+                callback_data = callback.get('data', '')
+                callback_id = callback.get('id')
+                
+                # Process toggle buttons
+                if callback_data.startswith('toggle:'):
+                    key = callback_data.split(':')[1]
+                    if key in SETTINGS_MAP:
+                        settings[key] = not settings.get(key, True)
+                        processed_count += 1
+                        logger.info(f"🔘 Toggled {key} → {settings[key]}")
+                        
+                        # Answer the callback
+                        status = "✅ مفعّل" if settings[key] else "⛔ معطّل"
+                        answer_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
+                        await session.post(answer_url, json={
+                            'callback_query_id': callback_id,
+                            'text': f'{SETTINGS_MAP[key]}: {status}',
+                            'show_alert': False
+                        })
+                
+                elif callback_data == 'refresh':
+                    await session.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery", json={
+                        'callback_query_id': callback_id,
+                        'text': '🔄 تم التحديث',
+                        'show_alert': False
+                    })
+                
+                elif callback_data == 'ignore':
+                    await session.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery", json={
+                        'callback_query_id': callback_id,
+                        'text': 'هذا مجرد عنوان 🏷️',
+                        'show_alert': False
+                    })
+            
+            # Save settings if any were changed
+            if processed_count > 0:
+                save_settings_local(settings)
+                logger.info(f"✅ Processed {processed_count} button clicks, settings saved")
+            
+            # Clear processed updates
+            if last_update_id:
+                clear_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+                await session.get(clear_url, params={'offset': last_update_id + 1})
+                
+    except Exception as e:
+        logger.warning(f"⚠️ Button processing error: {e}")
+
 
 async def auto_login(page, report_callback=None) -> bool:
     """
@@ -908,6 +1013,9 @@ class Monitor:
         logger.info("=" * 50)
         logger.info("🚀 FTTH Monitor")
         logger.info("=" * 50)
+        
+        # 🔘 Process any pending button clicks FIRST
+        await process_pending_button_clicks()
         
         startup_delay()
         
