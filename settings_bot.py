@@ -45,9 +45,9 @@ def sync_to_github():
         subprocess.run(["git", "config", "user.email", "bot@wakeel.local"], check=False)
         
         # 2. Add, Commit, Push
-        # 2. Add, Commit, Pull, Push
         subprocess.run(["git", "add", "settings.json"], check=True)
-        subprocess.run(["git", "commit", "settings.json", "-m", "config: update notification settings via bot"], check=True)
+        # Allow empty commits if no changes
+        subprocess.run(["git", "commit", "settings.json", "-m", "config: update notification settings via bot"], check=False)
         
         # Pull changes to avoid conflict (Rebase strategy)
         subprocess.run(["git", "pull", "--rebase"], check=True)
@@ -79,9 +79,13 @@ def build_keyboard(settings, loading_key=None):
         btn = InlineKeyboardButton(text, callback_data=f"toggle:{key}")
         keyboard.append([btn]) # Stacked vertically looks better for "Control Panel" feel
         
-    # Refresh button
-    refresh_text = "⏳ جاري التحديث..." if loading_key == "refresh" else "🔄 تحديث الحالة"
+    # Sync Actions
+    refresh_text = "⏳ جاري التحديث..." if loading_key == "refresh" else "🔄 تحديث الواجهة"
     keyboard.append([InlineKeyboardButton(refresh_text, callback_data="refresh")])
+    
+    sync_text = "⏳ جاري المزامنة..." if loading_key == "forced_sync" else "📥 جلب من السيرفر (Git Pull)"
+    keyboard.append([InlineKeyboardButton(sync_text, callback_data="forced_sync")])
+    
     return InlineKeyboardMarkup(keyboard)
 
 # -----------------------------------------------------------------------------
@@ -125,8 +129,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u_id = str(user.id).strip()
     allow_list = [str(x).strip() for x in [admin_id, dev_id] if x]
     
-    print(f"DEBUG: User={u_id}, Allowed={allow_list}")
-    
     # 1. Pass if User is Privileged
     if u_id in allow_list:
         pass
@@ -159,9 +161,14 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     settings = load_settings()
     target_key = None
+    action_type = "toggle"
 
     if data == "refresh":
         target_key = "refresh"
+        action_type = "refresh"
+    elif data == "forced_sync":
+        target_key = "forced_sync"
+        action_type = "sync"
     elif data.startswith("toggle:"):
         target_key = data.split(":")[1]
         if target_key in SETTINGS_MAP:
@@ -173,21 +180,34 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Show "Loading" State on Button
     try:
         await query.edit_message_text(
-            text="⏳ **جاري المزامنة مع السيرفر...**",
-            reply_markup=build_keyboard(settings, loading_key=target_key), # <--- Loading State
+            text="⏳ **جاري الاتصال بالسيرفر...**",
+            reply_markup=build_keyboard(settings, loading_key=target_key), 
             parse_mode='Markdown'
         )
     except Exception as e:
-        logger.warning(f"UI update warning: {e}")
+        logger.warning(f"UI loading update warning: {e}")
 
-    # 3. Perform Sync (Blocking)
+    # 3. Perform Logic (Blocking)
     synced = False
-    if target_key and target_key != "refresh":
+    
+    if action_type == "sync":
+        # Force Pull
+        try:
+            # Stash changes if any to avoid conflict
+            subprocess.run(["git", "stash"], check=False) 
+            subprocess.run(["git", "pull", "--rebase"], check=True)
+            # Reload fresh settings from disk
+            settings = load_settings()
+            synced = True
+        except Exception as e:
+            logger.error(f"Git pull failed: {e}")
+            synced = False
+            
+    elif action_type == "toggle":
          synced = sync_to_github()
-         # Reload to ensure consistency
          settings = load_settings()
-    else:
-         # Just refresh
+         
+    else: # refresh
          settings = load_settings()
          synced = True 
 
@@ -196,28 +216,37 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Adjust for Iraq Time (UTC+3)
     iraq_time = datetime.utcnow() + timedelta(hours=3)
-    time_str = iraq_time.strftime("%I:%M %p")
+    # Format: YYYY-MM-DD | HH:MM AM/PM
+    time_str = iraq_time.strftime("%Y-%m-%d | %I:%M %p")
     
-    status_msg = "✅ **تمت المزامنة**" if synced else "⚠️ **فشل الرفع (محفوظ محلياً)**"
-    if data == "refresh":
-        status_msg = "✅ **تم التحديث**"
+    if action_type == "sync":
+        status_msg = "📥 **تم جلب أحدث إعدادات**" if synced else "❌ **فشل الاتصال**"
+    elif action_type == "refresh":
+        status_msg = "🔄 **تم تحديث الواجهة**"
+    else:
+        status_msg = "✅ **تم الحفظ والمزامنة**" if synced else "⚠️ **محفوظ محلياً فقط**"
 
     final_text = (
         "👋 **لوحة التحكم**\n"
-        f"آخر تحديث: {time_str}\n"
-        f"الحالة: {status_msg}\n\n"
+        f"📅 الوقت: {time_str}\n"
+        f"📊 الحالة: {status_msg}\n\n"
         "إليك الإعدادات الحالية:"
     )
     
+    import asyncio
     for attempt in range(2):
         try:
             await query.edit_message_text(
                 text=final_text,
-                reply_markup=build_keyboard(settings), # <--- Final State (No loading)
+                reply_markup=build_keyboard(settings),
                 parse_mode='Markdown'
             )
             break
         except Exception as e:
+            # Check for "Message is not modified" error (harmless)
+            if "Message is not modified" in str(e):
+                logger.info("⚠️ UI already up to date (MessageNotModified)")
+                break
             if attempt == 0: await asyncio.sleep(1)
 
 if __name__ == '__main__':
