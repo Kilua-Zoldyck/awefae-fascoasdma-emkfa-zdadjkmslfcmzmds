@@ -1,6 +1,6 @@
 {
   "notify_tickets": true,
-  "notify_expired": false,
+  "notify_expired": true,
   "notify_renewed": false,
   "notify_new_sub": false
 }
