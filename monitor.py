@@ -413,6 +413,7 @@ class Telegram:
 👤 <b>اسم الوكيل:</b> {e(t.get('partner', {}).get('displayValue', ''))}
 
 👥 <b>المشترك:</b> {e(t.get('customer', {}).get('displayValue', ''))}
+📱 <b>موبايل:</b> {t.get('customerPhone', 'غير متوفر')}
 📋 <b>نوع الطلب:</b> {e(t.get('self', {}).get('displayValue', ''))}
 📝 <b>الوصف:</b> {e(t.get('summary', ''))[:300]}
 📍 <b>المنطقة:</b> {t.get('zone', {}).get('displayValue', '')}
@@ -450,6 +451,7 @@ class Telegram:
         data['expiry'] = expiry_raw[:10] if expiry_raw else 'N/A'
         
         data['zone'] = sub.get('zone', {}).get('displayValue') or sub.get('zoneName', 'N/A')
+        data['phone'] = sub.get('customerPhone', 'غير متوفر')
         return data
 
     def format_expired(self, sub: Dict) -> str:
@@ -462,6 +464,7 @@ class Telegram:
 
 🆔 <b>رمز الاشتراك:</b> {e(d['sub_id'])}
 👤 <b>المشترك:</b> {e(d['customer'])}
+📱 <b>موبايل:</b> {d['phone']}
 📦 <b>الخدمة:</b> {e(d['service'])}
 📅 <b>تاريخ الانتهاء:</b> {d['expiry']}
 📍 <b>المنطقة:</b> {e(d['zone'])}
@@ -481,6 +484,7 @@ class Telegram:
 
 🆔 <b>رمز الاشتراك:</b> {e(d['sub_id'])}
 👤 <b>المشترك:</b> {e(d['customer'])}
+📱 <b>موبايل:</b> {d['phone']}
 📦 <b>الخدمة:</b> {e(d['service'])}
 📅 <b>صالح حتى:</b> {d['expiry']}
 📍 <b>المنطقة:</b> {e(d['zone'])}
@@ -502,6 +506,7 @@ class Telegram:
 
 🆔 <b>رمز الاشتراك:</b> {e(d['sub_id'])}
 👤 <b>المشترك:</b> {e(d['customer'])}
+📱 <b>موبايل:</b> {d['phone']}
 📦 <b>الخدمة:</b> {e(d['service'])}
 📅 <b>صالح حتى:</b> {d['expiry']}
 📍 <b>المنطقة:</b> {e(d['zone'])}
@@ -583,6 +588,7 @@ class WhatsApp:
 👤 *اسم الوكيل:* {t.get('partner', {}).get('displayValue', '')}
 
 👥 *المشترك:* {t.get('customer', {}).get('displayValue', '')}
+📱 *موبايل:* {t.get('customerPhone', 'غير متوفر')}
 📋 *نوع الطلب:* {t.get('self', {}).get('displayValue', '')}
 📝 *الوصف:* {t.get('summary', '')[:300]}
 📍 *المنطقة:* {t.get('zone', {}).get('displayValue', '')}
@@ -640,7 +646,7 @@ class WhatsApp:
     def format_simple(self, sub: Dict) -> str:
         """Simple format for batched messages"""
         data = self._extract_common_data(sub) # Helper needs to be available or duplicated
-        return f"🆔 {data['sub_id']} | 👤 {data['customer']} | 📦 {data['service']}"
+        return f"🆔 {data['sub_id']} | 👤 {data['customer']} | 📱 {data.get('phone', 'N/A')} | 📦 {data['service']}"
 
     # Helper to extract common data (duplicated from Telegram class to keep classes independent)
     def _extract_common_data(self, sub: Dict) -> Dict:
@@ -656,6 +662,7 @@ class WhatsApp:
             data['service'] = f"{bundle} - {main_service}" if bundle else main_service
         else:
             data['service'] = bundle or sub.get('servicePlan', {}).get('displayValue', 'N/A')
+        data['phone'] = sub.get('customerPhone', 'غير متوفر')
         return data
 
 
@@ -713,6 +720,33 @@ class Monitor:
         logger.info(f"✅ Browser ready ({vp['width']}x{vp['height']})")
         return True
     
+    async def get_customer_phone(self, customer_id: str) -> Optional[str]:
+        """Fetch customer phone number from ID"""
+        try:
+            # Quick fetch from API
+            result = await self.page.evaluate(f"""
+                (async()=>{{
+                    try{{
+                        let token = localStorage.getItem('access_token');
+                        if (!token) return {{error:'no_token'}};
+                        
+                        let r = await fetch('https://admin.ftth.iq/api/customers/{customer_id}',{{
+                            headers:{{'Authorization':'Bearer '+token,'Accept':'application/json'}}
+                        }});
+                        
+                        return r.ok ? await r.json() : {{error:r.status}};
+                    }}catch(e){{return {{error:e.message}};}}
+                }})()
+            """)
+            
+            if result and 'model' in result:
+                return result.get('model', {}).get('primaryContact', {}).get('mobile')
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Phone fetch error: {e}")
+            return None
+
     async def _fetch_api(self) -> Optional[Dict]:
         """Internal API fetch - does NOT retry"""
         try:
@@ -926,6 +960,17 @@ class Monitor:
                 for t in new:
                     self.state.add(t['displayId'])
                     
+                    # 📞 Inject Phone Number
+                    try:
+                        customer_id = t.get('customer', {}).get('id')
+                        if customer_id:
+                            phone = await self.get_customer_phone(customer_id)
+                            if phone:
+                                t['customerPhone'] = phone
+                                logger.info(f"📱 Found phone for ticket {t['displayId']}: {phone}")
+                    except Exception as e:
+                        logger.error(f"❌ Phone injection error: {e}")
+                    
                     # Time filter: only send notification for recent tickets
                     try:
                         created_at = t.get('createdAt', '')
@@ -987,6 +1032,23 @@ class Monitor:
                     
                     # 🔍 DEBUG: Log data structure if we have N/A fields
                     if expired or renewed or new_subs:
+                        # 📞 Inject Phone Number for ALL subscriptions
+                        async def inject_phones(sub_list):
+                            for s in sub_list:
+                                try:
+                                    cid = s.get('customer', {}).get('id') or s.get('customerId')
+                                    if cid:
+                                        phone = await self.get_customer_phone(cid)
+                                        if phone:
+                                            s['customerPhone'] = phone
+                                            logger.info(f"📱 Found phone for subscription: {phone}")
+                                except Exception as e:
+                                    logger.error(f"❌ Phone injection error: {e}")
+                        
+                        await inject_phones(expired)
+                        await inject_phones(renewed)
+                        await inject_phones(new_subs)
+
                         changes = expired + renewed + new_subs
                         if changes:
                             logger.info(f"🔍 DEBUG DATA FOR FIRST CHANGE: {json.dumps(changes[0], ensure_ascii=False)}")
