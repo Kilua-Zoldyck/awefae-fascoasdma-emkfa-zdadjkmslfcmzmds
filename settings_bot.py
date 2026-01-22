@@ -59,25 +59,29 @@ def sync_to_github():
         logger.error(f"❌ Failed to sync to GitHub: {e}")
         return False
 
-def build_keyboard(settings):
+def build_keyboard(settings, loading_key=None):
     keyboard = []
     
     # Header Button (Info only)
     keyboard.append([InlineKeyboardButton("⚙️ لوحة التحكم", callback_data="ignore")])
     
     for key, label in SETTINGS_MAP.items():
-        is_on = settings.get(key, True)
-        
-        # UI Tweak: Use Clear Icons
-        status_icon = "✅" if is_on else "⛔"
-        text = f"{status_icon} {label}"
+        if key == loading_key:
+            # Loading State
+            text = f"⏳ {label}..."
+        else:
+            # Normal State
+            is_on = settings.get(key, True)
+            status_icon = "✅" if is_on else "⛔"
+            text = f"{status_icon} {label}"
         
         # Callback data format: "toggle:notify_tickets"
         btn = InlineKeyboardButton(text, callback_data=f"toggle:{key}")
         keyboard.append([btn]) # Stacked vertically looks better for "Control Panel" feel
         
     # Refresh button
-    keyboard.append([InlineKeyboardButton("🔄 تحديث الحالة", callback_data="refresh")])
+    refresh_text = "⏳ جاري التحديث..." if loading_key == "refresh" else "🔄 تحديث الحالة"
+    keyboard.append([InlineKeyboardButton(refresh_text, callback_data="refresh")])
     return InlineKeyboardMarkup(keyboard)
 
 # -----------------------------------------------------------------------------
@@ -150,54 +154,53 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("هذا مجرد عنوان 🏷️")
         return
         
-    # 1. ACK immediately with Toast (Stops hanging)
-    await query.answer("✅ جاري التطبيق والمزامنة...", show_alert=False)
+    # 1. ACK immediately
+    await query.answer("✅ جاري التنفيذ...", show_alert=False)
     
     settings = load_settings()
+    target_key = None
 
     if data == "refresh":
-        pass 
+        target_key = "refresh"
     elif data.startswith("toggle:"):
-        key = data.split(":")[1]
-        if key in SETTINGS_MAP:
-            settings[key] = not settings.get(key, True)
+        target_key = data.split(":")[1]
+        if target_key in SETTINGS_MAP:
+            # Toggle value immediately for local feedback
+            settings[target_key] = not settings.get(target_key, True)
             # Save locally
             SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
     
-    # 2. Show "Syncing" State on Message
+    # 2. Show "Loading" State on Button
     try:
         await query.edit_message_text(
-            text="⏳ **جاري الاتصال بالسيرفر...**\nرجاء الانتظار لحظات لتأكيد المزامنة.",
-            reply_markup=build_keyboard(settings),
+            text="⏳ **جاري المزامنة مع السيرفر...**",
+            reply_markup=build_keyboard(settings, loading_key=target_key), # <--- Loading State
             parse_mode='Markdown'
         )
     except Exception as e:
-        logger.warning(f"Failed to update message to 'Syncing' state: {e}")
+        logger.warning(f"UI update warning: {e}")
 
-    # 3. Perform Sync (Blocking but acknowledged)
-    # Only sync if we toggled something to check
+    # 3. Perform Sync (Blocking)
     synced = False
-    if data.startswith("toggle:"):
+    if target_key and target_key != "refresh":
          synced = sync_to_github()
-         # Force reload from file after sync to ensure consistency
+         # Reload to ensure consistency
          settings = load_settings()
     else:
-         # Refresh: reload from file
+         # Just refresh
          settings = load_settings()
          synced = True 
 
     # 4. Final Status Update
-    # 4. Final Status Update
     from datetime import datetime, timedelta
     
     # Adjust for Iraq Time (UTC+3)
-    # GitHub Actions/Servers usually run in UTC.
     iraq_time = datetime.utcnow() + timedelta(hours=3)
     time_str = iraq_time.strftime("%I:%M %p")
     
-    status_msg = "✅ **تمت المزامنة بنجاح**" if synced else "⚠️ **فشل الرفع (محفوظ محلياً)**"
+    status_msg = "✅ **تمت المزامنة**" if synced else "⚠️ **فشل الرفع (محفوظ محلياً)**"
     if data == "refresh":
-        status_msg = "✅ **تم تحديث الحالة**"
+        status_msg = "✅ **تم التحديث**"
 
     final_text = (
         "👋 **لوحة التحكم**\n"
@@ -206,23 +209,16 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "إليك الإعدادات الحالية:"
     )
     
-    # Try to update the message, with retry on failure
-    import asyncio
-    for attempt in range(2):  # Try twice
+    for attempt in range(2):
         try:
             await query.edit_message_text(
                 text=final_text,
-                reply_markup=build_keyboard(settings),
+                reply_markup=build_keyboard(settings), # <--- Final State (No loading)
                 parse_mode='Markdown'
             )
-            logger.info("✅ UI updated successfully")
-            break  # Success, exit loop
+            break
         except Exception as e:
-            if attempt == 0:
-                logger.warning(f"First attempt to update UI failed: {e}. Retrying...")
-                await asyncio.sleep(1)  # Wait 1 second before retry
-            else:
-                logger.error(f"❌ Failed to update UI after 2 attempts: {e}")
+            if attempt == 0: await asyncio.sleep(1)
 
 if __name__ == '__main__':
     if not TOKEN:
