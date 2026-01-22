@@ -83,7 +83,7 @@ def build_keyboard(settings, loading_key=None):
     refresh_text = "⏳ جاري التحديث..." if loading_key == "refresh" else "🔄 تحديث الواجهة"
     keyboard.append([InlineKeyboardButton(refresh_text, callback_data="refresh")])
     
-    sync_text = "⏳ جاري المزامنة..." if loading_key == "forced_sync" else "📥 جلب من السيرفر (Git Pull)"
+    sync_text = "⏳ جاري المزامنة..." if loading_key == "forced_sync" else "♻️ تحديث شامل للإعدادات"
     keyboard.append([InlineKeyboardButton(sync_text, callback_data="forced_sync")])
     
     return InlineKeyboardMarkup(keyboard)
