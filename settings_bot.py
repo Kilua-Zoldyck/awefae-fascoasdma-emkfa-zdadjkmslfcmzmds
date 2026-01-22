@@ -171,18 +171,19 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=build_keyboard(settings),
             parse_mode='Markdown'
         )
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to update message to 'Syncing' state: {e}")
 
     # 3. Perform Sync (Blocking but acknowledged)
     # Only sync if we toggled something to check
     synced = False
     if data.startswith("toggle:"):
          synced = sync_to_github()
+         # Force reload from file after sync to ensure consistency
+         settings = load_settings()
     else:
-         # Refresh assumes synced if file is consistent? No, just checking status.
-         # For simplicity, if refresh, we don't sync unless dirty.
-         # But user might want to refresh UI from file.
+         # Refresh: reload from file
+         settings = load_settings()
          synced = True 
 
     # 4. Final Status Update
@@ -205,14 +206,23 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "إليك الإعدادات الحالية:"
     )
     
-    try:
-        await query.edit_message_text(
-            text=final_text,
-            reply_markup=build_keyboard(settings),
-            parse_mode='Markdown'
-        )
-    except:
-        pass
+    # Try to update the message, with retry on failure
+    import asyncio
+    for attempt in range(2):  # Try twice
+        try:
+            await query.edit_message_text(
+                text=final_text,
+                reply_markup=build_keyboard(settings),
+                parse_mode='Markdown'
+            )
+            logger.info("✅ UI updated successfully")
+            break  # Success, exit loop
+        except Exception as e:
+            if attempt == 0:
+                logger.warning(f"First attempt to update UI failed: {e}. Retrying...")
+                await asyncio.sleep(1)  # Wait 1 second before retry
+            else:
+                logger.error(f"❌ Failed to update UI after 2 attempts: {e}")
 
 if __name__ == '__main__':
     if not TOKEN:
