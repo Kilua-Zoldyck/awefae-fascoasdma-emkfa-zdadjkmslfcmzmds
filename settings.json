@@ -2,5 +2,5 @@
   "notify_tickets": false,
   "notify_expired": false,
   "notify_renewed": false,
-  "notify_new_sub": false
+  "notify_new_sub": true
 }
