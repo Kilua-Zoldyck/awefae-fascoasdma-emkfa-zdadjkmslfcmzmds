@@ -15,13 +15,18 @@ env:
   GITHUB_ACTIONS: 'true'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: ftth-monitor-main
+  cancel-in-progress: true  # الجديد يلغي القديم عشان ميتزاحموش
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
+    
+    # إعادة المحاولة لو GitHub عنده مشاكل
+    strategy:
+      fail-fast: false
+      max-parallel: 1
     
     # Grant Write Access for Git Push
     permissions:
